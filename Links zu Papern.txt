@@ -1,0 +1,6 @@
+Spatio-Temporal Manifold Learning for Human Motions via Long-Horizon Modeling: https://ieeexplore.ieee.org/abstract/document/8809754
+3D human pose estimation in video with temporal convolutions and semi-supervised training: https://arxiv.org/abs/1811.11742
+3D Pose Estimation and Tracking in Handball Actions Using a Monocular Camera: https://www.mdpi.com/2313-433X/8/11/308
+(EvoSkeleton => Lifting von 2D-Keypoints in 3D) Cascaded Deep Monocular 3D Human Pose Estimation With Evolutionary Training Data: https://openaccess.thecvf.com/content_CVPR_2020/html/Li_Cascaded_Deep_Monocular_3D_Human_Pose_Estimation_With_Evolutionary_Training_CVPR_2020_paper.html
+(UDP-Pose => Extraktion von Keypoints aus VideoDaten): https://openaccess.thecvf.com/content_CVPR_2020/html/Huang_The_Devil_Is_in_the_Details_Delving_Into_Unbiased_Data_CVPR_2020_paper.html
+A Deep Learning Framework for Character Motion Synthesis and Editing: https://dl.acm.org/doi/epdf/10.1145/2897824.2925975
