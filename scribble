@@ -1,1 +1,13 @@
 
+- Probleme der Überlegungen
+	- Datenbeschaffung -> wo hole ich mehr als die 21 Sequenzen (bestenfalls 7m Wurf + MoCap) her?
+	- Wie kann Rotation des Balls korrekt durch das Humanoid Rig modelliert werden? Braucht Handgelenk + Fingergelenke bestenfalls. Sonst starrer Wurf und ggf. sehr komische Bewegungsabläufe um starre Hand +  Finger zu kompensieren --> Fehler
+	- Wie kann das Control Net mit nur 21 Datensätzen trainiert werden? Antwort: Gar nicht. 
+		○ Problem ist, dass Handballdaten die Trajektorien der Gelenkpunkte fehlen, nur Parameter vorhanden, aber keine Ground Truth
+		○ Vice versa müssen für MoCap irgendwie die Parameter gegeben werden, sonst Datenlage unzureichend
+			§ Bestimmt möglich für die 21 Datenpunkte die Parameter herauszufinden…
+		○ Lösung für geringe Datenlage:
+			§ Einsetzen von Weak Supervised Learning --> es existiert keine ground truth der motion (wie in MoCap gegeben) bei den HBL-Daten, also werden indirekte Indikatoren als Loss verwendet. So kann beispielsweise die Flugbahn aus der Bewegung rekonstruiert werden und mit der tatsächlichen des Balls verglichen werden. Die anderen Parameter in ähnlicher weise
+			§ So muss Modell eine korrekte Bewegung lernen (im fine-tuned motion manifold), die Parameter wie zum Beispiel die Abweichung bei der Flugbahn minimiert
+			§ Könnte funktionieren, weil ballflug direkt durch motion bestimmt
+Also p → z → X_pred (parameter werden in latent-space übersetzt (AE) und dann die Motion (X_pred) vorhergesagt. Aus dieser können dann die 
