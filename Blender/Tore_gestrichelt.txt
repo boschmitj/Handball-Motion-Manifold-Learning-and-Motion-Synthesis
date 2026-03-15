@@ -1,0 +1,111 @@
+import bpy
+import math
+
+POST = 0.08
+HEIGHT = 2.0
+INNER = 3.0
+
+POST_CENTER = INNER/2 + POST/2
+CROSSBAR_Z = HEIGHT + POST/2
+
+BACK_LEN = 0.6
+PIPE_RADIUS = 0.02
+
+DASH_LEN = 0.2  # 20 cm Stücke
+
+# Materialien
+def create_material(name, color):
+    mat = bpy.data.materials.new(name)
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes["Principled BSDF"]
+    bsdf.inputs[0].default_value = (*color, 1)
+    return mat
+
+black_mat = create_material("Black", (0,0,0))
+white_mat = create_material("White", (1,1,1))
+
+
+def create_goal(goal_x, rot=0):
+    # Parent Empty
+    bpy.ops.object.empty_add(type='PLAIN_AXES', location=(goal_x,0,0), rotation=(0,0,rot))
+    goal = bpy.context.object
+
+    # ------------------------
+    # Pfosten (alternierend schwarz/weiß)
+    # ------------------------
+    def striped_vertical(y_pos, z_start, z_end, width, parent, base_name):
+        z = z_start
+        toggle = True  # schwarz zuerst
+        while z < z_end:
+            seg_len = min(DASH_LEN, z_end - z)
+            bpy.ops.mesh.primitive_cube_add(location=(0, y_pos, z + seg_len/2))
+            obj = bpy.context.object
+            obj.dimensions = (width, width, seg_len)
+            obj.parent = parent
+            obj.name = f"{base_name}_{int(z*100)}"
+            # Material
+            obj.data.materials.clear()
+            obj.data.materials.append(black_mat if toggle else white_mat)
+            toggle = not toggle
+            z += seg_len
+
+    striped_vertical(-POST_CENTER, 0, HEIGHT, POST, goal, "LeftPost")
+    striped_vertical(POST_CENTER, 0, HEIGHT, POST, goal, "RightPost")
+
+    # ------------------------
+    # Latte (alternierend schwarz/weiß) entlang Y-Achse
+    # ------------------------
+    y_start = - (INNER/2 + POST)
+    y_end = INNER/2 + POST
+    x = 0
+    z = CROSSBAR_Z
+    y = y_start
+    toggle = True
+    while y < y_end:
+        seg_len = min(DASH_LEN, y_end - y)
+        # Rotation so, dass das Segment entlang Y liegt
+        bpy.ops.mesh.primitive_cube_add(location=(x, y + seg_len/2, z), rotation=(0,0,0))
+        obj = bpy.context.object
+        # Dimensionen: Breite entlang X, Länge entlang Y
+        obj.dimensions = (POST, seg_len, POST)
+        obj.parent = goal
+        obj.name = f"Crossbar_{int(y*100)}"
+        # Material
+        obj.data.materials.clear()
+        obj.data.materials.append(black_mat if toggle else white_mat)
+        toggle = not toggle
+        y += seg_len
+
+    # ------------------------
+    # hintere Rohre (ein Stück)
+    # ------------------------
+    def create_pipe(length, px, py, pz, rot, name):
+        bpy.ops.mesh.primitive_cylinder_add(
+            radius=PIPE_RADIUS,
+            depth=length,
+            location=(px, py, pz),
+            rotation=rot
+        )
+        obj = bpy.context.object
+        obj.name = name
+        obj.parent = goal
+        return obj
+
+    # untere Rohre
+    create_pipe(BACK_LEN, BACK_LEN/2, -POST_CENTER, POST/2, (0, math.radians(90), 0), "Back_LL")
+    create_pipe(BACK_LEN, BACK_LEN/2, POST_CENTER, POST/2, (0, math.radians(90), 0), "Back_LR")
+    # obere Rohre
+    create_pipe(BACK_LEN, BACK_LEN/2, -POST_CENTER, CROSSBAR_Z, (0, math.radians(90), 0), "Back_UL")
+    create_pipe(BACK_LEN, BACK_LEN/2, POST_CENTER, CROSSBAR_Z, (0, math.radians(90), 0), "Back_UR")
+    # vertikale Rohre hinten
+    VERT_LEN = HEIGHT + POST/2
+    VERT_CENTER_Z = VERT_LEN/2
+    create_pipe(VERT_LEN, BACK_LEN, -POST_CENTER, VERT_CENTER_Z, (0,0,0), "BackVert_L")
+    create_pipe(VERT_LEN, BACK_LEN, POST_CENTER, VERT_CENTER_Z, (0,0,0), "BackVert_R")
+
+
+# Tore erzeugen
+create_goal(20,0)
+create_goal(-20,math.pi)
+
+print("Two goals created with alternating black and white Pfosten/Latte and normal back pipes.")
