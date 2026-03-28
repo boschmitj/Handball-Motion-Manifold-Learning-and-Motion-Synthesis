@@ -1,0 +1,79 @@
+import bpy
+
+# ---------- Parameter ----------
+OFFSET_Z = 0.005
+
+SIDE_LENGTH = 40
+SIDE_WIDTH = 5
+
+END_LENGTH = 5
+END_WIDTH = 30
+
+# ---------- Material ----------
+def create_material(name, color):
+    mat = bpy.data.materials.new(name)
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes["Principled BSDF"]
+    bsdf.inputs[0].default_value = (color[0], color[1], color[2], 1)
+    return mat
+
+# #969696 → RGB normalisiert
+grey_mat = create_material("Surrounding", (150/255,150/255,150/255))
+
+# ---------- Plane erstellen ----------
+def create_plane(x_dim, y_dim, x, y, name):
+    
+    bpy.ops.mesh.primitive_plane_add(
+        size=1,
+        location=(x, y, OFFSET_Z)
+    )
+    
+    obj = bpy.context.object
+    obj.name = name
+    
+    # WICHTIG: dimensions statt scale
+    obj.dimensions = (x_dim, y_dim, 0)
+    
+    obj.data.materials.clear()
+    obj.data.materials.append(grey_mat)
+    
+    return obj
+
+
+# ---------- Seitensegmente (parallel zur X-Achse) ----------
+create_plane(
+    SIDE_LENGTH,
+    SIDE_WIDTH,
+    0,
+    12.5,
+    "Side_PosY"
+)
+
+create_plane(
+    SIDE_LENGTH,
+    SIDE_WIDTH,
+    0,
+    -12.5,
+    "Side_NegY"
+)
+
+
+# ---------- Endsegmente ----------
+create_plane(
+    END_LENGTH,
+    END_WIDTH,
+    22.5,
+    0,
+    "End_PosX"
+)
+
+create_plane(
+    END_LENGTH,
+    END_WIDTH,
+    -22.5,
+    0,
+    "End_NegX"
+)
+
+
+print("Handballfeld-Umgebung erzeugt.")
