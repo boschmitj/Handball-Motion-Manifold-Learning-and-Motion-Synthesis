@@ -1,0 +1,192 @@
+import bpy
+import math
+
+# ---------- Parameter ----------
+FIELD_LENGTH = 40
+FIELD_WIDTH = 20
+
+LINE_W = 0.05
+
+R6 = 6
+R9 = 9
+
+GOAL_HALF = 1.5
+
+DASH_LEN = 0.15
+DASH_GAP = 0.15
+
+
+# ---------- Szene leeren ----------
+bpy.ops.object.select_all(action='SELECT')
+bpy.ops.object.delete(use_global=False)
+
+
+# ---------- Materialien ----------
+def create_material(name,color):
+    mat=bpy.data.materials.new(name)
+    mat.use_nodes=True
+    bsdf=mat.node_tree.nodes["Principled BSDF"]
+    bsdf.inputs[0].default_value=(color[0],color[1],color[2],1)
+    return mat
+
+field_mat=create_material("Field",(0.6,0.85,1))
+line_mat=create_material("Line",(1,1,1))  # reines Weiß
+
+
+# ---------- Rechteck ----------
+def rect(xlen,ylen,x,y,rot=0):
+    bpy.ops.mesh.primitive_plane_add(size=1,location=(x,y,0.002),rotation=(0,0,rot))
+    o=bpy.context.object
+    o.dimensions=(xlen,ylen,0)
+
+    o.data.materials.clear()
+    o.data.materials.append(line_mat)
+
+    return o
+
+
+# ---------- Spielfeld ----------
+bpy.ops.mesh.primitive_plane_add(size=1,location=(0,0,0))
+field=bpy.context.object
+field.dimensions=(40,20,0)
+
+field.data.materials.clear()
+field.data.materials.append(field_mat)
+
+
+# ---------- Außenlinien ----------
+rect(0.05,20,-20,0)
+rect(0.05,20,20,0)
+
+rect(40,0.05,0,10)
+rect(40,0.05,0,-10)
+
+
+# ---------- Mittellinie ----------
+rect(0.05,20,0,0)
+
+
+# ---------- Mittelkreis ----------
+bpy.ops.mesh.primitive_circle_add(
+    vertices=128,
+    radius=1.5,
+    fill_type='NGON',
+    location=(0,0,0.002)
+)
+
+mid=bpy.context.object
+mid.data.materials.clear()
+mid.data.materials.append(line_mat)
+
+
+# ---------- Curve Helper ----------
+def create_curve(points):
+
+    curve=bpy.data.curves.new("curve","CURVE")
+    curve.dimensions='3D'
+
+    spline=curve.splines.new('POLY')
+    spline.points.add(len(points)-1)
+
+    for i,p in enumerate(points):
+        spline.points[i].co=(p[0],p[1],0,1)
+
+    obj=bpy.data.objects.new("curve_obj",curve)
+    bpy.context.collection.objects.link(obj)
+
+    curve.bevel_depth=LINE_W/2
+    curve.bevel_resolution=4
+
+    obj.data.materials.clear()
+    obj.data.materials.append(line_mat)
+
+    return obj
+
+
+# ---------- Arc Punkte ----------
+def arc_points(cx,cy,r,a0,a1,steps=64):
+
+    pts=[]
+
+    for i in range(steps+1):
+        a=a0+(a1-a0)*i/steps
+        x=cx+r*math.cos(a)
+        y=cy+r*math.sin(a)
+        pts.append((x,y))
+
+    return pts
+
+
+# ---------- 6m Linie ----------
+pts=[]
+pts+=arc_points(-20,-1.5,R6,-math.pi/2,0)
+pts.append((-14,-1.5))
+pts.append((-14,1.5))
+pts+=arc_points(-20,1.5,R6,0,math.pi/2)
+
+create_curve(pts)
+
+pts=[]
+pts+=arc_points(20,1.5,R6,math.pi/2,math.pi)
+pts.append((14,1.5))
+pts.append((14,-1.5))
+pts+=arc_points(20,-1.5,R6,math.pi,3*math.pi/2)
+
+create_curve(pts)
+
+
+# ---------- gestrichelter Arc ----------
+def dashed_arc(cx,cy,r,a0,a1):
+
+    a=a0
+
+    while a<a1:
+
+        seg=DASH_LEN/r
+        mid=a+seg/2
+
+        x=cx+r*math.cos(mid)
+        y=cy+r*math.sin(mid)
+
+        rot=mid+math.pi/2
+
+        rect(DASH_LEN,LINE_W,x,y,rot)
+
+        a+=(DASH_LEN+DASH_GAP)/r
+
+
+# ---------- 9m Linie ----------
+dashed_arc(-20,-1.5,R9,-math.pi/2,0)
+dashed_arc(-20,1.5,R9,0,math.pi/2)
+
+dashed_arc(20,1.5,R9,math.pi/2,math.pi)
+dashed_arc(20,-1.5,R9,math.pi,3*math.pi/2)
+
+
+# ---------- gestrichelte Verbindung ----------
+def dashed_line(x):
+
+    y=-1.5
+
+    while y<1.5:
+
+        rect(DASH_LEN,LINE_W,x,y+DASH_LEN/2,math.pi/2)
+
+        y+=DASH_LEN+DASH_GAP
+
+
+dashed_line(-11)
+dashed_line(11)
+
+
+# ---------- 7m Linien ----------
+rect(1,0.05,-13,0,math.pi/2)
+rect(1,0.05,13,0,math.pi/2)
+
+
+# ---------- 4m Linien ----------
+rect(0.15,0.05,-16,0,math.pi/2)
+rect(0.15,0.05,16,0,math.pi/2)
+
+
+print("Handballfeld erzeugt – alle Linien weiß.")
