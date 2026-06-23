@@ -1,0 +1,29 @@
+{
+  "frame_rate": 30.0,
+  "coordinate_system": "unity_y_up_left_handed",
+  "quaternion_format": "xyzw",
+  "root_joint": "Hips",
+  "joint_names": [
+    "Hips",
+    "RightUpLeg",
+    "RightLeg"
+  ],
+  "frames": [
+    {
+      "root_position": [0.0, 1.0, 0.0],
+      "rotations": [
+        [0.0, 0.0, 0.0, 1.0],
+        [0.0, 0.0, 0.0, 1.0],
+        [0.0, 0.0, 0.0, 1.0]
+      ]
+    },
+    {
+      "root_position": [0.01, 1.0, 0.02],
+      "rotations": [
+        [0.0, 0.02, 0.0, 0.9998],
+        [0.08, 0.0, 0.0, 0.9968],
+        [0.12, 0.0, 0.0, 0.9928]
+      ]
+    }
+  ]
+}

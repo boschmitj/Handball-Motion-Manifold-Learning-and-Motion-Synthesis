@@ -3,3 +3,20 @@ Blender/Bleacher/
 
 
 *.blend1
+HPE__old/video_pipeline/third_party/ViTPose/td-hm_ViTPose-large_8xb64-210e_coco-256x192-53609f55_20230314.pth
+HPE__old/video_pipeline/outputs/
+
+__pycache__/
+*.py[cod]
+
+
+HPE__old/video_pipeline/outputs/
+
+
+HPE__old/Mocap/*.tsv
+HPE__old/video_pipeline/mocap2/
+*.fbx
+*.qtm
+
+
+HPE__old/video_pipeline/third_party/MotionBERT/

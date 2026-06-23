@@ -1,0 +1,28 @@
+name: handball3d
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip=24.*
+  - setuptools<70
+  - wheel
+  - pytorch=2.1.2
+  - torchvision=0.16.2
+  - pytorch-cuda=12.1
+  - numpy<2
+  - scipy
+  - matplotlib
+  - opencv
+  - streamlit
+  - pip:
+      - openmim
+      - mmpretrain>=1.0.0
+      - mmdet>=3.1.0,<3.3.0
+      - einops
+      - timm
+      - yacs
+      - pyyaml
+      - tqdm
+      - plotly
