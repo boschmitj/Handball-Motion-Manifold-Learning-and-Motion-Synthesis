@@ -20,3 +20,7 @@ HPE__old/video_pipeline/mocap2/
 
 
 HPE__old/video_pipeline/third_party/MotionBERT/
+
+
+PenaltyProcessing/penalty_trajectories/
+PenaltyProcessing/game_position_files
