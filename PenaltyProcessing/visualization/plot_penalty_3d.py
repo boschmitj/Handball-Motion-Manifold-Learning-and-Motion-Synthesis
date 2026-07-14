@@ -10,12 +10,9 @@ Usage examples:
 from __future__ import annotations
 
 import argparse
-import csv
 import json
-import math
 import random
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -93,48 +90,6 @@ def parse_release_point_json(s: str) -> Optional[Dict[str, Any]]:
             return None
 
 
-def parse_iso_datetime(value: str) -> Optional[datetime]:
-    if not value or pd.isna(value):
-        return None
-    try:
-        return datetime.fromisoformat(str(value))
-    except Exception:
-        try:
-            return pd.to_datetime(value).to_pydatetime()
-        except Exception:
-            return None
-
-
-def parse_position_local_time(value: str) -> Optional[datetime]:
-    if not value:
-        return None
-    value = str(value).strip().strip('"')
-    for fmt in (
-        "%m/%d/%Y, %I:%M:%S.%f %p",
-        "%m/%d/%Y, %I:%M:%S %p",
-        "%d.%m.%Y, %H:%M:%S.%f",
-        "%d.%m.%Y, %H:%M:%S",
-    ):
-        try:
-            return datetime.strptime(value, fmt)
-        except ValueError:
-            continue
-    return None
-
-
-def try_float(value: str) -> Optional[float]:
-    if value is None:
-        return None
-    s = str(value).strip().strip('"')
-    if s == "":
-        return None
-    s = s.replace(",", ".")
-    try:
-        return float(s)
-    except ValueError:
-        return None
-
-
 def smooth_series(values: np.ndarray, window: int) -> np.ndarray:
     if window <= 1 or len(values) < window:
         return values
@@ -142,73 +97,6 @@ def smooth_series(values: np.ndarray, window: int) -> np.ndarray:
     return np.convolve(values, kernel, mode="same")
 
 
-def resolve_fixture_positions_path(input_path: Path, fixture_file: str) -> Optional[Path]:
-    root = input_path.resolve().parent.parent.parent
-    candidates = [
-        root / "games_position_files" / fixture_file,
-        Path("games_position_files") / fixture_file,
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return None
-
-
-def extract_goalkeeper_trajectory(
-    positions_file: Path,
-    ball_direction: str,
-    start_dt: Optional[datetime],
-    end_dt: Optional[datetime],
-) -> List[Dict[str, Any]]:
-    if not positions_file.exists() or start_dt is None or end_dt is None:
-        return []
-
-    same_side_sign = 1 if ball_direction != "negative" else -1
-    candidates: Dict[str, List[Dict[str, Any]]] = {}
-
-    with positions_file.open("r", newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f, delimiter=";")
-        for row in reader:
-            if (row.get("group name") or "").strip() == "Ball":
-                continue
-
-            local_dt = parse_position_local_time(row.get("formatted local time", ""))
-            if local_dt is None or local_dt < start_dt or local_dt > end_dt:
-                continue
-
-            x = try_float(row.get("x in m", ""))
-            y = try_float(row.get("y in m", ""))
-            z = try_float(row.get("z in m", ""))
-            if x is None or y is None or z is None:
-                continue
-
-            if x == 0 or int(math.copysign(1, x)) != same_side_sign:
-                continue
-            if not (16.0 <= abs(x) <= 20.0 and abs(y) <= 1.5):
-                continue
-
-            sensor_id = (row.get("sensor id") or row.get("mapped id") or row.get("full name") or "unknown").strip()
-            candidates.setdefault(sensor_id, []).append(
-                {
-                    "t_local": local_dt,
-                    "x": x,
-                    "y": y,
-                    "z": z,
-                }
-            )
-
-    if not candidates:
-        return []
-
-    def score(item: Tuple[str, List[Dict[str, Any]]]) -> Tuple[int, float, float]:
-        _, points = item
-        mean_abs_x = sum(abs(p["x"]) for p in points) / len(points)
-        mean_abs_y = sum(abs(p["y"]) for p in points) / len(points)
-        return (len(points), mean_abs_x, -mean_abs_y)
-
-    _, trajectory = max(candidates.items(), key=score)
-    trajectory.sort(key=lambda p: p["t_local"])
-    return trajectory
 
 
 def build_shot_list(df: pd.DataFrame, shot_id: Optional[str], home: Optional[str], away: Optional[str]) -> pd.DataFrame:
@@ -409,14 +297,10 @@ def main():
         meta = row.to_dict()
         shot_id = row.get("id", f"shot_{i}")
         successful = str(row.get("success", "")).strip() == "1"
-        
+
         # Determine shot direction
         direction = detect_shot_direction(traj)
-        start_dt = parse_iso_datetime(str(row.get("start_time_local", "")))
-        end_dt = parse_iso_datetime(str(row.get("end_time_local", "")))
-
-        fixture_positions = resolve_fixture_positions_path(input_path, str(row.get("fixture_file", "")))
-        goalkeeper_points = extract_goalkeeper_trajectory(fixture_positions, direction, start_dt, end_dt) if fixture_positions else []
+        goalkeeper_points = parse_trajectory_json(row.get("goalkeeper_trajectory_json", ""))
         
         fig = plt.figure(figsize=(12, 8))
         ax = fig.add_subplot(111, projection="3d")

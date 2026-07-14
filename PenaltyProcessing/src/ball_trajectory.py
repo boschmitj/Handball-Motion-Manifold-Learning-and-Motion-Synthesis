@@ -6,7 +6,7 @@ import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from penalty_time_utils import parse_position_local_time, try_float, try_int
 
@@ -21,6 +21,16 @@ class BallPoint:
     speed: float
     accel: float
     direction: Optional[float]
+
+
+@dataclass
+class GoalkeeperPoint:
+    local_dt: datetime
+    ts_ms: Optional[int]
+    x: float
+    y: float
+    z: float
+    sensor_id: str
 
 
 def load_ball_points(positions_file: Path) -> List[BallPoint]:
@@ -76,6 +86,168 @@ def load_ball_points(positions_file: Path) -> List[BallPoint]:
 
     points.sort(key=lambda p: (p.local_dt, p.ts_ms if p.ts_ms is not None else -1))
     return points
+
+
+def load_goalkeeper_candidates(positions_file: Path) -> List[GoalkeeperPoint]:
+    """Load potential goalkeeper points from one positions file.
+
+    We keep only points close to either goal area so downstream matching remains fast.
+    """
+    points: List[GoalkeeperPoint] = []
+
+    with positions_file.open("r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f, delimiter=";")
+
+        required = {
+            "formatted local time",
+            "group name",
+            "x in m",
+            "y in m",
+            "z in m",
+            "ts in ms",
+        }
+        missing = [col for col in required if col not in (reader.fieldnames or [])]
+        if missing:
+            raise ValueError(f"Missing required columns in {positions_file.name}: {missing}")
+
+        for row in reader:
+            if (row.get("group name") or "").strip() == "Ball":
+                continue
+
+            local_dt = parse_position_local_time(row.get("formatted local time", ""))
+            x = try_float(row.get("x in m", ""))
+            y = try_float(row.get("y in m", ""))
+            z = try_float(row.get("z in m", ""))
+            ts_ms = try_int(row.get("ts in ms", ""))
+
+            if local_dt is None or x is None or y is None or z is None:
+                continue
+
+            # Restrict to likely goalkeeper area near either goal.
+            if not (16.0 <= abs(x) <= 20.0 and abs(y) <= 1.5):
+                continue
+
+            sensor_id = (
+                (row.get("sensor id") or "").strip()
+                or (row.get("mapped id") or "").strip()
+                or (row.get("full name") or "").strip()
+                or "unknown"
+            )
+
+            points.append(
+                GoalkeeperPoint(
+                    local_dt=local_dt,
+                    ts_ms=ts_ms,
+                    x=x,
+                    y=y,
+                    z=z,
+                    sensor_id=sensor_id,
+                )
+            )
+
+    points.sort(key=lambda p: (p.sensor_id, p.local_dt, p.ts_ms if p.ts_ms is not None else -1))
+    return points
+
+
+def _detect_shot_direction(points: List[BallPoint]) -> int:
+    if not points:
+        return 1
+    avg_x = sum(p.x for p in points) / len(points)
+    return -1 if avg_x < 0 else 1
+
+
+def _align_goalkeeper_to_ball_timestamps(
+    sensor_points: List[GoalkeeperPoint],
+    ball_traj: List[BallPoint],
+    sensor_id: str,
+) -> List[GoalkeeperPoint]:
+    """Build goalkeeper samples exactly at ball timestamps (same window, same count)."""
+    if not sensor_points or not ball_traj:
+        return []
+
+    aligned: List[GoalkeeperPoint] = []
+    idx = 0
+
+    for ball_point in ball_traj:
+        while idx + 1 < len(sensor_points) and sensor_points[idx + 1].local_dt <= ball_point.local_dt:
+            idx += 1
+
+        best = sensor_points[idx]
+        if idx + 1 < len(sensor_points):
+            left_delta = abs((ball_point.local_dt - sensor_points[idx].local_dt).total_seconds())
+            right_delta = abs((sensor_points[idx + 1].local_dt - ball_point.local_dt).total_seconds())
+            if right_delta < left_delta:
+                best = sensor_points[idx + 1]
+
+        aligned.append(
+            GoalkeeperPoint(
+                local_dt=ball_point.local_dt,
+                ts_ms=ball_point.ts_ms,
+                x=best.x,
+                y=best.y,
+                z=best.z,
+                sensor_id=sensor_id,
+            )
+        )
+
+    return aligned
+
+
+def extract_goalkeeper_trajectory(
+    candidates: List[GoalkeeperPoint],
+    ball_traj: List[BallPoint],
+    prepend_frames: int = 5,
+) -> Tuple[List[GoalkeeperPoint], str]:
+    """Select one goalkeeper trajectory aligned to ball timestamps.
+
+    Result uses the exact same timestamp grid as ball_traj.
+    """
+    if not candidates or not ball_traj:
+        return [], ""
+
+    start_dt = ball_traj[0].local_dt
+    end_dt = ball_traj[-1].local_dt
+    same_side_sign = _detect_shot_direction(ball_traj)
+
+    by_sensor: Dict[str, List[GoalkeeperPoint]] = {}
+    for p in candidates:
+        by_sensor.setdefault(p.sensor_id, []).append(p)
+
+    best_sensor = ""
+    best_segment: List[GoalkeeperPoint] = []
+    best_score: Optional[Tuple[int, float, float]] = None
+
+    for sensor_id, points in by_sensor.items():
+        sensor_points = [
+            p
+            for p in points
+            if int(math.copysign(1, p.x)) == same_side_sign
+        ]
+        if not sensor_points:
+            continue
+
+        in_range_indices = [
+            i for i, p in enumerate(sensor_points) if start_dt <= p.local_dt <= end_dt
+        ]
+        if not in_range_indices:
+            continue
+
+        first_in_range = in_range_indices[0]
+        last_in_range = in_range_indices[-1]
+        segment = sensor_points[first_in_range : last_in_range + 1]
+        if not segment:
+            continue
+
+        mean_abs_x = sum(abs(p.x) for p in segment) / len(segment)
+        mean_abs_y = sum(abs(p.y) for p in segment) / len(segment)
+        score = (len(segment), mean_abs_x, -mean_abs_y)
+
+        if best_score is None or score > best_score:
+            best_score = score
+            best_sensor = sensor_id
+            best_segment = _align_goalkeeper_to_ball_timestamps(segment, ball_traj, sensor_id)
+
+    return best_segment, best_sensor
 
 
 def first_idx_at_or_after(points: List[BallPoint], dt: datetime) -> Optional[int]:
@@ -250,6 +422,21 @@ def serialize_trajectory(points: List[BallPoint]) -> str:
                 "v": None if math.isnan(p.speed) else p.speed,
                 "a": None if math.isnan(p.accel) else p.accel,
                 "dir": p.direction,
+            }
+        )
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def serialize_goalkeeper_trajectory(points: List[GoalkeeperPoint]) -> str:
+    payload = []
+    for p in points:
+        payload.append(
+            {
+                "t_local": p.local_dt.isoformat(timespec="milliseconds"),
+                "ts_ms": p.ts_ms,
+                "x": p.x,
+                "y": p.y,
+                "z": p.z,
             }
         )
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

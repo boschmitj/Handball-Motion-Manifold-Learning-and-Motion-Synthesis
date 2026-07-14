@@ -11,12 +11,15 @@ from typing import Dict, List, Optional, Tuple
 
 from ball_trajectory import (
     adjust_start_idx_by_distance,
+    extract_goalkeeper_trajectory,
     find_goalline_crossing_idx,
     first_idx_at_or_after,
     first_idx_at_or_before,
     is_plausible_release_point,
     load_ball_points,
+    load_goalkeeper_candidates,
     select_release_point,
+    serialize_goalkeeper_trajectory,
     serialize_point,
     serialize_trajectory,
 )
@@ -33,6 +36,7 @@ from penalty_time_utils import parse_penalty_local_time, try_float
 
 
 MAX_TRAJECTORY_POINT_COUNT = 60
+PREPEND_FRAME_COUNT = 5
 
 
 def process_penalties(
@@ -103,6 +107,7 @@ def process_penalties(
     for fixture_file, fixture_rows in grouped_rows.items():
         try:
             points = load_ball_points(fixture_file)
+            goalkeeper_candidates = load_goalkeeper_candidates(fixture_file)
         except Exception as exc:
             for idx, row in fixture_rows:
                 unresolved.append(
@@ -272,6 +277,26 @@ def process_penalties(
                                     release_point, release_flag = select_release_point(traj)
                                     flags.append("release_point:dynamic_extended")
 
+            # Keep existing trajectory logic and prepend a fixed number of frames.
+            prepended_ball_count = min(PREPEND_FRAME_COUNT, max(0, extended_start_idx))
+            ball_start_idx_with_prepend = max(0, extended_start_idx - PREPEND_FRAME_COUNT)
+            traj = points[ball_start_idx_with_prepend : extended_end_idx + 1]
+            if prepended_ball_count > 0:
+                flags.append(f"ball_prepend_frames:{prepended_ball_count}")
+
+            goalkeeper_traj, goalkeeper_sensor_id = extract_goalkeeper_trajectory(
+                goalkeeper_candidates,
+                traj,
+            )
+            if goalkeeper_traj:
+                flags.append(f"goalkeeper_points:{len(goalkeeper_traj)}")
+                if len(goalkeeper_traj) == len(traj):
+                    flags.append("goalkeeper_aligned_with_ball:1")
+                else:
+                    flags.append("goalkeeper_aligned_with_ball:0")
+            else:
+                flags.append("goalkeeper_points:0")
+
             finite_speeds = [p.speed for p in traj if not math.isnan(p.speed)]
             finite_accels = [p.accel for p in traj if not math.isnan(p.accel)]
             max_v = max(finite_speeds) if finite_speeds else float("nan")
@@ -306,6 +331,8 @@ def process_penalties(
                     "release_angle": "" if release_point.direction is None else f"{release_point.direction:.6f}",
                     "trajectory_point_count": str(trajectory_point_count),
                     "trajectory_json": serialize_trajectory(traj),
+                    "goalkeeper_sensor_id": goalkeeper_sensor_id,
+                    "goalkeeper_trajectory_json": serialize_goalkeeper_trajectory(goalkeeper_traj),
                     "flags": ";".join(flags),
                 }
             )
@@ -329,6 +356,8 @@ def process_penalties(
         "release_angle",
         "trajectory_point_count",
         "trajectory_json",
+        "goalkeeper_sensor_id",
+        "goalkeeper_trajectory_json",
         "flags",
     ]
 
