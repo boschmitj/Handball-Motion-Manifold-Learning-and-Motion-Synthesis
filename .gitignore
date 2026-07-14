@@ -26,3 +26,4 @@ HPE__old/video_pipeline/third_party/MotionBERT/
 
 PenaltyProcessing/out/
 PenaltyProcessing/games_position_files
+PenaltyProcessing/penalties.csv
