@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -82,15 +83,15 @@ def resolve_fixture_file(
 
 def create_run_folder(base_dir: Path) -> Path:
     """Create the next numbered run folder inside penalty_trajectories directory."""
-    base_dir.mkdir(exist_ok=True)
+    base_dir.mkdir(parents=True, exist_ok=True)
 
     existing_ids = []
     for path in base_dir.glob("run_*"):
         if not path.is_dir():
             continue
-        suffix = path.name[len("run_"):]
-        if suffix.isdigit():
-            existing_ids.append(int(suffix))
+        match = re.fullmatch(r"run_(\d+)(?:__.*)?", path.name)
+        if match:
+            existing_ids.append(int(match.group(1)))
             
     now = datetime.now().strftime("%d_%m_%Y_%H_%M")
 

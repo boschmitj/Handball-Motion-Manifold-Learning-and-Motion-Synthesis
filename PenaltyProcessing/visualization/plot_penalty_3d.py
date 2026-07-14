@@ -238,7 +238,11 @@ def main():
     parser.add_argument("--shot-id", default=None)
     parser.add_argument("--home-team", default=None)
     parser.add_argument("--away-team", default=None)
-    parser.add_argument("--output-dir", default="out/penalty_plots", help="Directory to save plots")
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Directory to save plots (default: <parent of --input>/penalty_plots)",
+    )
     parser.add_argument("--show", action="store_true", help="Display plots interactively (opens matplotlib windows)")
     parser.add_argument("--only-interactive", action="store_true", help="Show the plot interactively without saving an image")
     parser.add_argument("--decimate", type=int, default=1)
@@ -266,13 +270,12 @@ def main():
 
     # Create output directory only when plots will be saved.
     input_path = Path(args.input)
-    output_dir = Path(args.output_dir)
-    if output_dir == Path("penalty_plots"):
-        latest_run_dir = find_latest_run_dir(input_path)
-        if latest_run_dir is not None:
-            output_dir = latest_run_dir / "penalty_plots"
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+    else:
+        output_dir = input_path.resolve().parent / "penalty_plots"
     if not args.only_interactive:
-        output_dir.mkdir(exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     df = load_trajectories(Path(args.input))
     sel = build_shot_list(df, args.shot_id, args.home_team, args.away_team)
