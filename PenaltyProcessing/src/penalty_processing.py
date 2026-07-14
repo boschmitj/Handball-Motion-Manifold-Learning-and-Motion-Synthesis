@@ -32,6 +32,9 @@ from fixture_resolution import (
 from penalty_time_utils import parse_penalty_local_time, try_float
 
 
+MAX_TRAJECTORY_POINT_COUNT = 60
+
+
 def process_penalties(
     penalties_file: Path,
     positions_dir: Path,
@@ -95,6 +98,7 @@ def process_penalties(
         grouped_rows[fixture_file].append((idx, row))
 
     results: List[Dict[str, str]] = []
+    skipped_by_point_count = 0
 
     for fixture_file, fixture_rows in grouped_rows.items():
         try:
@@ -277,6 +281,11 @@ def process_penalties(
             if not player_name:
                 player_name = row.get("name", "")
 
+            trajectory_point_count = len(traj)
+            if trajectory_point_count >= MAX_TRAJECTORY_POINT_COUNT:
+                skipped_by_point_count += 1
+                continue
+
             results.append(
                 {
                     "id": row.get("id", ""),
@@ -295,7 +304,7 @@ def process_penalties(
                     "max_v": "" if math.isnan(max_v) else f"{max_v:.6f}",
                     "max_a": "" if math.isnan(max_a) else f"{max_a:.6f}",
                     "release_angle": "" if release_point.direction is None else f"{release_point.direction:.6f}",
-                    "trajectory_point_count": str(len(traj)),
+                    "trajectory_point_count": str(trajectory_point_count),
                     "trajectory_json": serialize_trajectory(traj),
                     "flags": ";".join(flags),
                 }
@@ -350,6 +359,9 @@ def process_penalties(
     print("=== shot_matcher summary ===")
     print(f"Penalties input rows: {len(rows)}")
     print(f"Resolved trajectories: {len(results)}")
+    print(
+        f"Skipped by trajectory point count (>={MAX_TRAJECTORY_POINT_COUNT}): {skipped_by_point_count}"
+    )
     print(f"Unresolved/issues: {len(unresolved)}")
     print(f"Output file: {output_file}")
     print(f"Issues file: {issues_file}")
