@@ -43,7 +43,7 @@ def is_successful_penalty(row: Dict[str, str]) -> bool:
 
 def should_skip_penalty_row(row: Dict[str, str]) -> bool:
     """Skip penalties with clock times that are known to be tracked incorrectly."""
-    return row.get("game_clock", "").strip() in {"30:00", "60:00"}
+    return row.get("game_clock", "").strip() in {"00:00", "0:00", "30:00", "60:00"}
 
 
 def build_edge_case_mappings() -> Dict[Tuple[str, str], str]:
@@ -67,7 +67,7 @@ def resolve_fixture_file(
     away = row.get("away_team", "")
     key = (canonical_team_name(home), canonical_team_name(away))
     candidates = fixture_index.get(key, [])
-
+    
     if len(candidates) == 1:
         return candidates[0], []
     if len(candidates) == 0:
