@@ -8,7 +8,10 @@
 5. Evaluate how smooth transition between data sources is
 6. Do same, but with input being video only (secondary task)
 ## Things that need to be done, starting from upcoming
-First, decide if Blender can be used for VR too, if yes -> use Blender with Blender scripting only?
+Blender will be used for everything preprocessing related to get to character animation fbx files, PoRs, Ball positions, Matched throws' trajectories. 
+Unity will then be the runtime environment, with scripts linking the fbx to the character, driving the ball assets position/animation and controlling playback and shot selection.
+
+
 1. Work on Penalty Processing Pipeline to enhance the quality of the parameters
     - Decide what to do with throws that have a deflection
     - Incorporate a step which creates a csv containing for each throw the important attrbutes
