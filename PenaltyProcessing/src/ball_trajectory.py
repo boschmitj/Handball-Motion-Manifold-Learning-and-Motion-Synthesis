@@ -102,6 +102,7 @@ class PossessionContextPoint:
     direction: Optional[float]
     group_name: str
     full_name: str
+    sensor_id: str
     possession_id: str
 
 
@@ -304,10 +305,11 @@ def load_goalkeeper_candidates(positions_file: Path) -> List[GoalkeeperPoint]:
 
 
 def load_possession_context_candidates(positions_file: Path) -> List[PossessionContextPoint]:
-    """Load non-ball rows with a non-empty possession field for contextual thrower evidence.
+    """Load non-ball rows for contextual thrower evidence.
 
-    These points are used to decide who is holding the ball around the release
-    moment. Only rows that actually report a possessed ball are kept.
+    The possession field is kept even when empty so the detector can observe
+    when a player transitions from possessing the ball to not possessing it.
+    This is diagnostic context only; it does not decide release by itself.
 
     Args:
         positions_file: Path to a single fixture positions CSV.
@@ -341,10 +343,7 @@ def load_possession_context_candidates(positions_file: Path) -> List[PossessionC
             if (row.get("group name") or "").strip() == "Ball":
                 continue
 
-            # Only keep points where someone actually possesses a ball.
             possession_id = (row.get("ball possession (id of possessed ball)") or "").strip()
-            if not possession_id:
-                continue
 
             local_dt = parse_position_local_time(row.get("formatted local time", ""))
             x = try_float(row.get("x in m", ""))
@@ -370,6 +369,7 @@ def load_possession_context_candidates(positions_file: Path) -> List[PossessionC
                     direction=direction,
                     group_name=(row.get("group name") or "").strip(),
                     full_name=(row.get("full name") or "").strip(),
+                    sensor_id=(row.get("sensor id") or "").strip(),
                     possession_id=possession_id,
                 )
             )
@@ -1023,7 +1023,6 @@ def _least_squares_fit(design_rows: List[List[float]], values: List[float]) -> L
 
 def _fit_projectile_segment(
     segment: List[BallPoint],
-    candidate_idx: int,
     goal_sign: int,
 ) -> Dict[str, Any]:
     """Fit a ballistic (projectile) model to a trajectory segment.
@@ -1181,21 +1180,35 @@ def _score_possession_context(
             "pre_context": None,
             "post_context": None,
             "context_gap_ms": None,
+            "possession_transition": None,
         }
 
     # Collect candidate points before and after the release time.
     before: List[Tuple[int, PossessionContextPoint]] = []
     after: List[Tuple[int, PossessionContextPoint]] = []
-    for idx, point in enumerate(candidates):
+    for point in candidates:
         delta_ms = int((release_dt - point.local_dt).total_seconds() * 1000)
         if 0 <= delta_ms <= window_before_ms:
             before.append((delta_ms, point))
         elif 0 <= -delta_ms <= window_after_ms:
             after.append((-delta_ms, point))
 
-    # Closest point before release and closest point after release.
-    pre = min(before, key=lambda item: item[0])[1] if before else None
-    post = min(after, key=lambda item: item[0])[1] if after else None
+    occupied_before = [item for item in before if item[1].possession_id]
+    # Closest occupied point before release if available, otherwise the nearest
+    # point before release of any kind.
+    pre = min(occupied_before, key=lambda item: item[0])[1] if occupied_before else (min(before, key=lambda item: item[0])[1] if before else None)
+
+    # Prefer the same tracked sensor after the release so we can observe the
+    # possession dropping to empty for that player.
+    post_same_sensor = None
+    if pre is not None:
+        same_sensor_after_empty = [item for item in after if item[1].sensor_id == pre.sensor_id and not item[1].possession_id]
+        same_sensor_after_any = [item for item in after if item[1].sensor_id == pre.sensor_id]
+        if same_sensor_after_empty:
+            post_same_sensor = min(same_sensor_after_empty, key=lambda item: item[0])[1]
+        elif same_sensor_after_any:
+            post_same_sensor = min(same_sensor_after_any, key=lambda item: item[0])[1]
+    post = post_same_sensor if post_same_sensor is not None else (min(after, key=lambda item: item[0])[1] if after else None)
 
     # Temporal score: 1.0 if the pre point is exactly at release, decaying to 0
     # at the edge of the window.
@@ -1210,7 +1223,9 @@ def _score_possession_context(
     if pre is not None:
         if post is None:
             transition_score = 1.0
-        elif post.possession_id != pre.possession_id or post.full_name != pre.full_name:
+        elif post.sensor_id == pre.sensor_id and not post.possession_id:
+            transition_score = 1.0
+        elif pre.possession_id and post.possession_id != pre.possession_id:
             transition_score = 0.85
         else:
             transition_score = 0.35
@@ -1223,6 +1238,29 @@ def _score_possession_context(
         motion_score = 0.6 * speed_term + 0.4 * accel_term
 
     core_score = 0.45 * temporal_score + 0.35 * transition_score + 0.20 * motion_score
+
+    possession_transition = None
+    if pre is not None:
+        possession_transition = {
+            "pre": {
+                "t_local": pre.local_dt.isoformat(timespec="milliseconds"),
+                "sensor_id": pre.sensor_id,
+                "full_name": pre.full_name,
+                "group_name": pre.group_name,
+                "possession_id": pre.possession_id,
+            },
+            "post": None
+            if post is None
+            else {
+                "t_local": post.local_dt.isoformat(timespec="milliseconds"),
+                "sensor_id": post.sensor_id,
+                "full_name": post.full_name,
+                "group_name": post.group_name,
+                "possession_id": post.possession_id,
+            },
+            "delta_ms": None if post is None else int((post.local_dt - pre.local_dt).total_seconds() * 1000),
+            "transition_to_empty": bool(pre.possession_id and post is not None and post.sensor_id == pre.sensor_id and not post.possession_id),
+        }
     return {
         "core_score": core_score,
         "pre_context": None
@@ -1246,7 +1284,105 @@ def _score_possession_context(
             "accel": None if math.isnan(post.accel) else post.accel,
         },
         "context_gap_ms": None if pre is None else int((release_dt - pre.local_dt).total_seconds() * 1000),
+        "possession_transition": possession_transition,
     }
+
+
+def _build_release_search_bounds(
+    points: List[BallPoint],
+    start_idx: int,
+    goal_distance_limit_m: float,
+    ground_z_threshold_m: float,
+    min_post_points: int,
+) -> Dict[str, Any]:
+    """Compute the indices that bound the candidate search window."""
+    goal_cutoff_idx = find_goal_cutoff_idx(points, start_idx, goal_distance_limit_m=goal_distance_limit_m)
+    ground_contact_idx = find_ground_contact_idx(points, start_idx, ground_z_threshold_m=ground_z_threshold_m)
+
+    search_end_idx = len(points) - 1
+    if goal_cutoff_idx is not None:
+        search_end_idx = min(search_end_idx, max(start_idx, goal_cutoff_idx - 1))
+    if ground_contact_idx is not None:
+        search_end_idx = min(search_end_idx, ground_contact_idx)
+
+    candidate_start_idx = start_idx
+    candidate_end_idx = max(candidate_start_idx, search_end_idx - min_post_points + 1)
+
+    return {
+        "goal_cutoff_idx": goal_cutoff_idx,
+        "ground_contact_idx": ground_contact_idx,
+        "search_end_idx": search_end_idx,
+        "candidate_start_idx": candidate_start_idx,
+        "candidate_end_idx": candidate_end_idx,
+        "goal_sign": _infer_goal_sign(points, start_idx),
+    }
+
+
+def _score_release_candidate(
+    points: List[BallPoint],
+    idx: int,
+    search_end_idx: int,
+    goal_sign: int,
+    possession_candidates: List[PossessionContextPoint],
+) -> Optional[Dict[str, Any]]:
+    """Score one candidate release index against the post-release segment."""
+    segment = points[idx : search_end_idx + 1]
+    fit = _fit_projectile_segment(segment, goal_sign)
+    if not fit.get("valid"):
+        return None
+
+    release_dt = points[idx].local_dt
+    core_context = _score_possession_context(possession_candidates, release_dt)
+
+    composite_score = (
+        0.60 * fit["projectile_score"]
+        + 0.15 * fit["kinematic_score"]
+        + 0.10 * core_context["core_score"]
+        + 0.15 * fit["distance_score"]
+    )
+
+    return {
+        "idx": idx,
+        "score": composite_score,
+        "projectile_score": fit["projectile_score"],
+        "kinematic_score": fit["kinematic_score"],
+        "core_score": core_context["core_score"],
+        "distance_score": fit["distance_score"],
+        "position_rmse": fit["position_rmse"],
+        "velocity_rmse": fit["velocity_rmse"],
+        "gravity_error": fit["gravity_error"],
+        "release_position": fit["release_position"],
+        "release_velocity": fit["release_velocity"],
+        "release_distance_to_goal": fit["release_distance_to_goal"],
+        "post_points": len(segment),
+        "pre_context": core_context["pre_context"],
+        "post_context": core_context["post_context"],
+        "possession_transition": core_context["possession_transition"],
+    }
+
+
+def _confidence_from_candidates(
+    best_candidate: Dict[str, Any],
+    second_best_score: float,
+    candidate_start_idx: int,
+    candidate_end_idx: int,
+) -> float:
+    """Convert the top-two candidate scores into a 0..1 confidence value."""
+    best_gap = best_candidate["score"] - second_best_score
+    edge_penalty = 0.1 if best_candidate["idx"] in {candidate_start_idx, candidate_end_idx} else 0.0
+
+    return max(
+        0.0,
+        min(
+            1.0,
+            0.45 * best_candidate["projectile_score"]
+            + 0.20 * min(1.0, best_gap / 0.15)
+            + 0.15 * min(1.0, best_candidate["post_points"] / 10.0)
+            + 0.10 * best_candidate["distance_score"]
+            + 0.10 * best_candidate["core_score"]
+            - edge_penalty,
+        ),
+    )
 
 
 def detect_physics_based_release_point(
@@ -1301,23 +1437,19 @@ def detect_physics_based_release_point(
             diagnostics={"reason": "empty_points"},
         )
 
-    # Determine where the search must stop.
-    goal_cutoff_idx = find_goal_cutoff_idx(points, start_idx, goal_distance_limit_m=goal_distance_limit_m)
-    ground_contact_idx = find_ground_contact_idx(points, start_idx, ground_z_threshold_m=ground_z_threshold_m)
-
-    search_end_idx = len(points) - 1
-    if goal_cutoff_idx is not None:
-        search_end_idx = min(search_end_idx, max(start_idx, goal_cutoff_idx - 1))
-    if ground_contact_idx is not None:
-        search_end_idx = min(search_end_idx, ground_contact_idx)
-
-    # The last candidate must leave at least min_post_points after it.
-    candidate_start_idx = start_idx
-    candidate_end_idx = search_end_idx - min_post_points + 1
-    if candidate_end_idx < candidate_start_idx:
-        candidate_end_idx = candidate_start_idx
-
-    goal_sign = _infer_goal_sign(points, start_idx)
+    bounds = _build_release_search_bounds(
+        points,
+        start_idx,
+        goal_distance_limit_m=goal_distance_limit_m,
+        ground_z_threshold_m=ground_z_threshold_m,
+        min_post_points=min_post_points,
+    )
+    goal_cutoff_idx = bounds["goal_cutoff_idx"]
+    ground_contact_idx = bounds["ground_contact_idx"]
+    search_end_idx = bounds["search_end_idx"]
+    candidate_start_idx = bounds["candidate_start_idx"]
+    candidate_end_idx = bounds["candidate_end_idx"]
+    goal_sign = bounds["goal_sign"]
     possession_candidates = possession_candidates or []
 
     candidate_scores: List[Dict[str, Any]] = []
@@ -1325,37 +1457,15 @@ def detect_physics_based_release_point(
 
     # Try every index in the candidate window as a potential release point.
     for idx in range(candidate_start_idx, candidate_end_idx + 1):
-        segment = points[idx : search_end_idx + 1]
-        fit = _fit_projectile_segment(segment, idx, goal_sign)
-        if not fit.get("valid"):
-            continue
-
-        release_dt = points[idx].local_dt
-        core_context = _score_possession_context(possession_candidates, release_dt)
-        composite_score = (
-            0.60 * fit["projectile_score"]
-            + 0.15 * fit["kinematic_score"]
-            + 0.10 * core_context["core_score"]
-            + 0.15 * fit["distance_score"]
+        scored_candidate = _score_release_candidate(
+            points,
+            idx,
+            search_end_idx,
+            goal_sign,
+            possession_candidates,
         )
-
-        scored_candidate = {
-            "idx": idx,
-            "score": composite_score,
-            "projectile_score": fit["projectile_score"],
-            "kinematic_score": fit["kinematic_score"],
-            "core_score": core_context["core_score"],
-            "distance_score": fit["distance_score"],
-            "position_rmse": fit["position_rmse"],
-            "velocity_rmse": fit["velocity_rmse"],
-            "gravity_error": fit["gravity_error"],
-            "release_position": fit["release_position"],
-            "release_velocity": fit["release_velocity"],
-            "release_distance_to_goal": fit["release_distance_to_goal"],
-            "post_points": len(segment),
-            "pre_context": core_context["pre_context"],
-            "post_context": core_context["post_context"],
-        }
+        if scored_candidate is None:
+            continue
         candidate_scores.append(scored_candidate)
         if best_candidate is None or scored_candidate["score"] > best_candidate["score"]:
             best_candidate = scored_candidate
@@ -1388,21 +1498,11 @@ def detect_physics_based_release_point(
     sorted_candidates = sorted(candidate_scores, key=lambda item: item["score"], reverse=True)
     second_best_score = sorted_candidates[1]["score"] if len(sorted_candidates) > 1 else 0.0
     best_gap = best_candidate["score"] - second_best_score
-    edge_penalty = 0.0
-    if best_candidate["idx"] in {candidate_start_idx, candidate_end_idx}:
-        edge_penalty = 0.1
-
-    confidence = max(
-        0.0,
-        min(
-            1.0,
-            0.45 * best_candidate["projectile_score"]
-            + 0.20 * min(1.0, best_gap / 0.15)
-            + 0.15 * min(1.0, best_candidate["post_points"] / 10.0)
-            + 0.10 * best_candidate["distance_score"]
-            + 0.10 * best_candidate["core_score"]
-            - edge_penalty,
-        ),
+    confidence = _confidence_from_candidates(
+        best_candidate,
+        second_best_score,
+        candidate_start_idx,
+        candidate_end_idx,
     )
 
     diagnostics: Dict[str, Any] = {
@@ -1410,6 +1510,7 @@ def detect_physics_based_release_point(
         "best_candidate_rank_gap": best_gap,
         "search_end_idx": search_end_idx,
         "goal_sign": goal_sign,
+        "possession_transition": best_candidate.get("possession_transition"),
     }
 
     return ReleaseDetectionResult(
@@ -1448,7 +1549,7 @@ def select_release_point(points: List[BallPoint]) -> Tuple[BallPoint, str]:
         strategy was used.
     """
     if not points:
-        return points[0], "release_point:empty_trajectory"
+        raise ValueError("select_release_point requires at least one trajectory point")
 
     start_x = points[0].x if points else 0.0
     goal_x = 20.0 if start_x > 0 else -20.0

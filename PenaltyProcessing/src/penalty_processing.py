@@ -64,6 +64,67 @@ MAX_TRAJECTORY_POINT_COUNT = 60
 # Number of extra frames prepended to the trajectory for visualization context.
 PREPEND_FRAME_COUNT = 5
 
+
+def _build_trajectory_window(
+    points: List,
+    start_idx: int,
+    end_idx: int,
+    extend_start_ms: int,
+) -> Tuple[List, int, int]:
+    """Build the visualization trajectory window around the release search span."""
+    extended_start_dt = points[start_idx].local_dt - timedelta(milliseconds=extend_start_ms)
+    extended_end_dt = points[end_idx].local_dt + timedelta(milliseconds=300)
+
+    extended_start_idx = first_idx_at_or_after(points, extended_start_dt)
+    if extended_start_idx is None:
+        extended_start_idx = 0
+
+    extended_end_idx = first_idx_at_or_before(points, extended_end_dt)
+    if extended_end_idx is None:
+        extended_end_idx = len(points) - 1
+
+    traj = points[extended_start_idx : extended_end_idx + 1]
+    return traj, extended_start_idx, extended_end_idx
+
+
+def _build_release_detection_json(
+    traj: List,
+    physics_release,
+    legacy_release_flag: str,
+    release_point,
+) -> str:
+    """Serialize the physics-based diagnostics payload."""
+    return json.dumps(
+        {
+            "release_timestamp": release_point.local_dt.isoformat(timespec="milliseconds"),
+            "release_position": None
+            if physics_release.release_point is None
+            else {
+                "x": physics_release.release_point.x,
+                "y": physics_release.release_point.y,
+                "z": physics_release.release_point.z,
+            },
+            "release_velocity": physics_release.release_velocity,
+            "release_distance_to_goal": physics_release.release_distance_to_goal,
+            "release_score": physics_release.release_score,
+            "projectile_score": physics_release.projectile_score,
+            "kinematic_score": physics_release.kinematic_score,
+            "core_score": physics_release.core_score,
+            "distance_score": physics_release.distance_score,
+            "confidence": physics_release.confidence,
+            "candidate_window": list(physics_release.candidate_window),
+            "goal_cutoff_idx": physics_release.goal_cutoff_idx,
+            "ground_contact_idx": physics_release.ground_contact_idx,
+            "ground_contact_time_local": None
+            if physics_release.ground_contact_idx is None
+            else traj[min(physics_release.ground_contact_idx, len(traj) - 1)].local_dt.isoformat(timespec="milliseconds"),
+            "legacy_release_flag": legacy_release_flag,
+            "diagnostics": physics_release.diagnostics,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
 # TODO: Modularize this function heavily -> break it up into smaller functions, reusable; For example for appending unresolved (its always nearly the same)
 def process_penalties(
     penalties_file: Path,
@@ -268,103 +329,50 @@ def process_penalties(
                 )
                 continue
 
-            # Decide whether the (possibly corrected) start index is already a
-            # plausible release point. If so, we use it directly; otherwise we
-            # search for a better release point later.
+            # Keep the old 7 m plausibility check as a diagnostic baseline, but
+            # the new detector no longer depends on it to choose the release.
             use_start_as_release = is_plausible_release_point(points, start_idx, distance)
-            # TODO: Both conditional branches extend start and end for visualization (use one function)
-            if use_start_as_release: # just sets release idx to start idx
-                # Extend the trajectory window for visualization: a bit before
-                # the start and a bit after the goal-line crossing.
-                extended_start_dt = points[start_idx].local_dt - timedelta(milliseconds=extend_start_ms)
-                extended_end_dt = points[end_idx].local_dt + timedelta(milliseconds=300)
-
-                extended_start_idx = first_idx_at_or_after(points, extended_start_dt)
-                if extended_start_idx is None:
-                    extended_start_idx = 0
-
-                extended_end_idx = first_idx_at_or_before(points, extended_end_dt)
-                if extended_end_idx is None:
-                    extended_end_idx = len(points) - 1
-
-                traj = points[extended_start_idx : extended_end_idx + 1]
-                if not traj:
-                    unresolved.append(
-                        {
-                            "row_idx": str(idx),
-                            "penalty_id": row.get("id", ""),
-                            "home_team": row.get("home_team", ""),
-                            "away_team": row.get("away_team", ""),
-                            "issue": "empty_trajectory",
-                        }
-                    )
-                    continue
-                # TODO: This is very naive. See is_plausible_release_point
-                release_point = points[start_idx]
-                release_flag = "release_point:start_timestamp_plausible"
-                flags.append(release_flag)
+            if use_start_as_release:
+                flags.append("start_timestamp_plausible:1")
             else:
-                # Release = start was not plausible
-                # Same window extension as above, but we will search for a
-                # better release point inside the trajectory.
-                extended_start_dt = points[start_idx].local_dt - timedelta(milliseconds=extend_start_ms)
-                extended_end_dt = points[end_idx].local_dt + timedelta(milliseconds=300)
+                flags.append("start_timestamp_plausible:0")
 
-                extended_start_idx = first_idx_at_or_after(points, extended_start_dt)
-                if extended_start_idx is None:
-                    extended_start_idx = 0
+            window_traj, extended_start_idx, extended_end_idx = _build_trajectory_window(
+                points,
+                start_idx,
+                end_idx,
+                extend_start_ms,
+            )
+            if not window_traj:
+                unresolved.append(
+                    {
+                        "row_idx": str(idx),
+                        "penalty_id": row.get("id", ""),
+                        "home_team": row.get("home_team", ""),
+                        "away_team": row.get("away_team", ""),
+                        "issue": "empty_trajectory",
+                    }
+                )
+                continue
 
-                extended_end_idx = first_idx_at_or_before(points, extended_end_dt)
-                if extended_end_idx is None:
-                    extended_end_idx = len(points) - 1
+            legacy_release_point, legacy_release_flag = select_release_point(window_traj)
+            flags.append(f"legacy_{legacy_release_flag}")
 
-                traj = points[extended_start_idx : extended_end_idx + 1]
-                if not traj:
-                    unresolved.append(
-                        {
-                            "row_idx": str(idx),
-                            "penalty_id": row.get("id", ""),
-                            "home_team": row.get("home_team", ""),
-                            "away_team": row.get("away_team", ""),
-                            "issue": "empty_trajectory",
-                        }
-                    )
-                    continue
+            physics_release = detect_physics_based_release_point(
+                window_traj,
+                0,
+                possession_candidates=possession_candidates,
+            )
 
-                # Use the legacy heuristic to pick a release point.
-                release_point, release_flag = select_release_point(traj)
-                flags.append(release_flag)
+            if physics_release.release_point is not None:
+                release_point = physics_release.release_point
+                release_flag = "release_point:physics_based"
+                flags.append("physics_release:applied")
+            else:
+                release_point = legacy_release_point
+                release_flag = legacy_release_flag
+                flags.append("physics_release:failed")
 
-                # TODO: We do a further check (will overwrite release points again, so why not directly in select_release_point method?)
-                # This will check if our ball traveled not enough, as to say we need to remap it (why would we remap it and not just find a better release point in the plausible positional window?)
-                # If the selected release point is too close to the goal
-                # (d_por < 6.5 m), the ball may have already been released
-                # earlier. We estimate how long it would take to travel back to
-                # the 7.5 m line at the current speed and extend the window
-                # backwards accordingly, then re-run the release search.
-                goal_x = 20.0 if release_point.x > 0 else -20.0
-                dx = release_point.x - goal_x
-                d_por = math.sqrt(dx * dx + (release_point.y) * (release_point.y)) # Distance ball traveled
-
-                # Dynamic extended release
-                if d_por < 6.5 and not math.isnan(release_point.speed) and release_point.speed > 0:
-                    dt_needed = (7.5 - d_por) / release_point.speed # How long it would take to go back to 7.5 m distance with current speed (of wrong release point)
-                    if dt_needed > 0 and dt_needed < 5.0: # Why these values?
-                        margin_s = 0.1
-                        target_dt = release_point.local_dt - timedelta(seconds=(dt_needed + margin_s)) # Find out the point in time when the ball probably left the thrower's hand
-                        if target_dt < points[extended_start_idx].local_dt: # Only check if this target time was before the extended start time (which is 3s before, so this will probably be true for every throw, if not the throw itself is not making any sense anyways)
-                            new_start_idx = first_idx_at_or_after(points, target_dt)
-                            if new_start_idx is None: # not really probable, but keep. However, log if this is the case (with warning)
-                                new_start_idx = 0
-                            if new_start_idx < extended_start_idx: # This will be true every time, no?
-                                extended_start_idx = new_start_idx
-                                traj = points[extended_start_idx : extended_end_idx + 1] # Set new time range and search in it again
-                                if traj:
-                                    release_point, release_flag = select_release_point(traj)
-                                    flags.append("release_point:dynamic_extended")
-
-            # Keep existing trajectory logic and prepend a fixed number of frames.
-            # TODO: Why are we doing the above again? Is this necessary for every approach of finding the PoR or only for some (like the one for dynamic extended release)?
             # Prepend a fixed number of frames before the (possibly extended)
             # start so the visualization shows some context before the release.
             prepended_ball_count = min(PREPEND_FRAME_COUNT, max(0, extended_start_idx)) # So only if our extended start index is not "extended" enough for our PREPEND_FRAME_COUNT
@@ -387,27 +395,6 @@ def process_penalties(
                     flags.append("goalkeeper_aligned_with_ball:0")
             else:
                 flags.append("goalkeeper_points:0")
-
-            # Compute the legacy release point for comparison/reference.
-            legacy_release_point, legacy_release_flag = select_release_point(traj)
-            flags.append(f"legacy_{legacy_release_flag}")
-
-            # Run the physics-based release detector. If it succeeds, it
-            # overrides the legacy release point; otherwise we keep the legacy
-            # one.
-            physics_release = detect_physics_based_release_point(
-                traj,
-                0,
-                possession_candidates=possession_candidates,
-            )
-            if physics_release.release_point is not None:
-                release_point = physics_release.release_point
-                release_flag = "release_point:physics_based"
-                flags.append("physics_release:applied")
-            else:
-                release_point = legacy_release_point
-                release_flag = legacy_release_flag
-                flags.append("physics_release:failed")
 
             # Compute max speed/accel over the trajectory for the output row.
             finite_speeds = [p.speed for p in traj if not math.isnan(p.speed)]
@@ -443,36 +430,7 @@ def process_penalties(
                     "release_time_local": release_point.local_dt.isoformat(timespec="milliseconds"),
                     "legacy_release_point_json": serialize_point(legacy_release_point),
                     "legacy_release_time_local": legacy_release_point.local_dt.isoformat(timespec="milliseconds"),
-                    "release_detection_json": json.dumps(
-                        {
-                            "release_timestamp": release_point.local_dt.isoformat(timespec="milliseconds"),
-                            "release_position": None
-                            if physics_release.release_point is None
-                            else {
-                                "x": physics_release.release_point.x,
-                                "y": physics_release.release_point.y,
-                                "z": physics_release.release_point.z,
-                            },
-                            "release_velocity": physics_release.release_velocity,
-                            "release_distance_to_goal": physics_release.release_distance_to_goal,
-                            "release_score": physics_release.release_score,
-                            "projectile_score": physics_release.projectile_score,
-                            "kinematic_score": physics_release.kinematic_score,
-                            "core_score": physics_release.core_score,
-                            "distance_score": physics_release.distance_score,
-                            "confidence": physics_release.confidence,
-                            "candidate_window": list(physics_release.candidate_window),
-                            "goal_cutoff_idx": physics_release.goal_cutoff_idx,
-                            "ground_contact_idx": physics_release.ground_contact_idx,
-                            "ground_contact_time_local": None
-                            if physics_release.ground_contact_idx is None
-                            else traj[min(physics_release.ground_contact_idx, len(traj) - 1)].local_dt.isoformat(timespec="milliseconds"),
-                            "legacy_release_flag": legacy_release_flag,
-                            "diagnostics": physics_release.diagnostics,
-                        },
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ),
+                    "release_detection_json": _build_release_detection_json(window_traj, physics_release, legacy_release_flag, release_point),
                     "release_confidence": "" if physics_release.release_point is None else f"{physics_release.confidence:.6f}",
                     "release_score": "" if physics_release.release_point is None else f"{physics_release.release_score:.6f}",
                     "projectile_score": "" if physics_release.release_point is None else f"{physics_release.projectile_score:.6f}",
