@@ -11,12 +11,7 @@ Pipeline summary:
 - Export issues for unresolved or partially resolved rows.
 """
 
-#!/usr/bin/env python3
-"""CLI entrypoint for penalty trajectory extraction."""
-
 from penalty_processing import main
-
 
 if __name__ == "__main__":
     main()
-import unicodedata

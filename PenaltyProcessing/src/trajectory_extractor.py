@@ -1,6 +1,12 @@
 """
 Extract full trajectory data for shots by cross-referencing position tracking file.
 This enriches shots.csv with complete ballistic information.
+
+Note: This is a standalone/experimental analysis module (uses pandas/numpy)
+that predates the main penalty pipeline in ``penalty_processing.py``. It loads
+a shots CSV together with a single position-tracking CSV and extracts
+trajectories around each shot based on raw millisecond timestamps. It also
+contains heuristics to detect whether a shot is a 7 m penalty.
 """
 
 import pandas as pd
@@ -11,14 +17,19 @@ class TrajectoryExtractor:
     """Match shots to position tracking data and extract complete trajectories."""
     
     def __init__(self, shots_file, positions_file):
-        """Load both datasets."""
+        """Load both datasets.
+
+        Args:
+            shots_file: Path to a shots CSV (semicolon-delimited).
+            positions_file: Path to a single position-tracking CSV (semicolon-delimited).
+        """
         print("Loading shots data...")
         self.shots_df = pd.read_csv(shots_file, sep=';')
         
         print("Loading position tracking data (this may take a moment)...")
         self.positions_df = pd.read_csv(positions_file, sep=';')
         
-        # Convert timestamps
+        # Convert timestamps to a common millisecond integer representation.
         self.shots_df['ts_ms'] = self.shots_df['timestamp_ms'].astype(int)
         self.positions_df['ts_ms'] = pd.to_numeric(
             self.positions_df['ts in ms'].astype(str).str.replace(',', ''),
@@ -26,6 +37,7 @@ class TrajectoryExtractor:
         ).astype(int)
         
         # Filter for ball positions only
+        # Keep only rows whose "full name" contains "Ball".
         self.ball_data = self.positions_df[
             self.positions_df['full name'].str.contains('Ball', case=False, na=False)
         ].sort_values('ts_ms').reset_index(drop=True)
@@ -47,6 +59,8 @@ class TrajectoryExtractor:
         shot_time = int(shot['ts_ms'])
         
         # Get ball positions around shot time
+        # Select ball points whose timestamp falls within the window around
+        # the shot timestamp.
         time_range = (
             (self.ball_data['ts_ms'] >= shot_time - time_window_ms) &
             (self.ball_data['ts_ms'] <= shot_time + time_window_ms)
@@ -54,13 +68,16 @@ class TrajectoryExtractor:
         
         trajectory_points = self.ball_data[time_range].copy()
         
+        # Need at least two points to derive any trajectory information.
         if len(trajectory_points) < 2:
             return None
         
         # Calculate derived metrics
+        # Relative time (in ms) of each trajectory point compared to the shot.
         trajectory_points['time_from_shot_ms'] = trajectory_points['ts_ms'] - shot_time
         
         # Extract position and speed columns
+        # Keep only the columns we care about and drop rows with missing positions.
         trajectory_points = trajectory_points[[
             'ts_ms', 'time_from_shot_ms', 'x in m', 'y in m', 'z in m',
             'speed in m/s', 'acceleration in m/s2', 'direction of movement in deg'
@@ -70,6 +87,8 @@ class TrajectoryExtractor:
             return None
         
         # Find release point (max speed before shot, or closest to shot time)
+        # The release is assumed to be the last point at or before the shot
+        # timestamp; if there is none, fall back to the first point.
         release_idx = (trajectory_points['time_from_shot_ms'] <= 0).sum() - 1
         if release_idx < 0:
             release_idx = 0
@@ -146,7 +165,13 @@ class TrajectoryExtractor:
         return self.shots_df[self.shots_df['shot_category'] == 'penalty'].reset_index(drop=True)
     
     def analyze_7m_penalties(self, limit=None):
-        """Analyze all 7m penalty shots."""
+        """Analyze all 7m penalty shots.
+
+        Runs ``detect_7m_penalty`` on every penalty shot (optionally limited
+        to the first ``limit`` rows) and aggregates the results into a
+        DataFrame. Trajectory data is excluded from the returned table; only
+        the summary metrics are kept.
+        """
         penalties = self.get_penalty_shots()
         if limit:
             penalties = penalties.head(limit)
@@ -157,6 +182,8 @@ class TrajectoryExtractor:
         for idx in penalties.index:
             detection = self.detect_7m_penalty(idx)
             if 'trajectory_data' in detection and detection['trajectory_data'] is not None:
+                # Pull summary metrics out of the trajectory data and drop the
+                # bulky trajectory point table from the final result.
                 traj = detection.pop('trajectory_data')
                 detection['distance'] = traj['distance_m']
                 detection['max_speed'] = traj['max_speed']
@@ -176,6 +203,8 @@ class TrajectoryExtractor:
 
 # USAGE EXAMPLE
 if __name__ == '__main__':
+    # Example usage: load a shots file together with one position file and
+    # analyze the penalty shots found in it.
     extractor = TrajectoryExtractor(
         '/home/josh/BA/Download_CSV/shots.csv',
         '/home/josh/BA/Download_CSV/HC_Erlangen_vs_HSV_Hamburg_2_phases_positions.csv'
