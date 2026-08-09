@@ -18,7 +18,7 @@ sys.path.append(str(Path(__file__).resolve().parent))
 
 # Module-level logger. Configured in main(); defaults to WARNING so library
 # use does not spam stdout unless the caller opts in.
-logger = logging.getLogger("simple_release_detector")
+logger = logging.getLogger("release_detector_trajectory_based")
 
 from ball_trajectory import BallPoint, serialize_point, serialize_trajectory
 from fixture_resolution import build_edge_case_mappings, build_fixture_index, resolve_fixture_file

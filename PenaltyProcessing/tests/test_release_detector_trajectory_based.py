@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 from ball_trajectory import BallPoint
-from simple_release_detector import _has_strong_direction_change, select_release_index
+from release_detector_trajectory_based import _has_strong_direction_change, select_release_index
 
 
 def make_point(ts: datetime, x: float, z: float, speed: float, accel: float) -> BallPoint:
