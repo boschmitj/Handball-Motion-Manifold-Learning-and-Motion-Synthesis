@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -27,6 +28,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from penalty_time_utils import parse_position_local_time, try_float, try_int
+
+
+# Module-level logger. Defaults to WARNING so library use does not spam stdout
+# unless the caller opts in (e.g. via logging.basicConfig(level=logging.INFO)).
+logger = logging.getLogger("ball_trajectory")
 
 
 # ---------------------------------------------------------------------------

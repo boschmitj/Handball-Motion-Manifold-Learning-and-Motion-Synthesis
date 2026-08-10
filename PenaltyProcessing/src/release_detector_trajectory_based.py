@@ -452,6 +452,63 @@ def select_release_index(points: Sequence[BallPoint], start_idx: int, end_idx: i
     return best.idx
 
 
+def compute_velocity_acceleration_from_points(points: Sequence[BallPoint]) -> Tuple[List[Optional[float]], List[Optional[float]]]:
+    """Compute per-point speed (m/s) and acceleration magnitude (m/s^2) purely
+    from the trajectory's positions using finite differences over time.
+
+    Unlike the fixture CSV's ``speed in m/s`` / ``acceleration in m/s2``
+    columns, these values are derived only from the sampled positions (x, y, z)
+    and local timestamps of the ball points.
+
+    Speed is the magnitude of the 3D velocity vector: central differences over
+    the two-neighbour span for interior points, forward/backward differences at
+    the boundaries. Acceleration is the magnitude of the central difference of
+    consecutive velocity vectors; it is None for the first and last point where
+    no two-sided neighbour support exists.
+    """
+    n = len(points)
+    speeds: List[Optional[float]] = [None] * n
+    accels: List[Optional[float]] = [None] * n
+    if n < 2:
+        return speeds, accels
+
+    # 3D velocity vectors aligned to each point.
+    velocities: List[Optional[Tuple[float, float, float]]] = [None] * n
+
+    for i in range(n):
+        if i == 0:
+            a_idx, b_idx = 0, 1
+        elif i == n - 1:
+            a_idx, b_idx = n - 2, n - 1
+        else:
+            a_idx, b_idx = i - 1, i + 1
+
+        dt = (points[b_idx].local_dt - points[a_idx].local_dt).total_seconds()
+        if dt <= 0:
+            continue
+        vx = (points[b_idx].x - points[a_idx].x) / dt
+        vy = (points[b_idx].y - points[a_idx].y) / dt
+        vz = (points[b_idx].z - points[a_idx].z) / dt
+        velocities[i] = (vx, vy, vz)
+        speeds[i] = math.sqrt(vx * vx + vy * vy + vz * vz)
+
+    # Acceleration: central difference of the velocity vectors.
+    for i in range(1, n - 1):
+        v_prev = velocities[i - 1]
+        v_next = velocities[i + 1]
+        if v_prev is None or v_next is None:
+            continue
+        dt = (points[i + 1].local_dt - points[i - 1].local_dt).total_seconds()
+        if dt <= 0:
+            continue
+        ax = (v_next[0] - v_prev[0]) / dt
+        ay = (v_next[1] - v_prev[1]) / dt
+        az = (v_next[2] - v_prev[2]) / dt
+        accels[i] = math.sqrt(ax * ax + ay * ay + az * az)
+
+    return speeds, accels
+
+
 def detect_simple_release_point(penalty_row: Dict[str, str], positions_dir: Path, fixture_cache: Optional[FixtureCache] = None, fixture_path: Optional[Path] = None, points: Optional[List[BallPoint]] = None) -> Dict[str, Any]:
     player_id = _coerce_text(penalty_row.get("player_id"))
     goalkeeper_id = _coerce_text(penalty_row.get("goalkeeper_id"))
@@ -494,22 +551,42 @@ def detect_simple_release_point(penalty_row: Dict[str, str], positions_dir: Path
         release_idx = max(start_idx, min(end_idx, start_idx + 2))
 
     release_point = points[release_idx]
+    window_points = points[start_idx:end_idx + 1]
+    # Keep both index spaces explicit:
+    # - release_idx_global: index in the full loaded points list
+    # - release_idx: index relative to trajectory/window_points
+    release_idx_global = release_idx
+    release_idx_local = max(0, release_idx_global - start_idx)
+    trajectory = [
+        {
+            "t_local": p.local_dt.isoformat(timespec="milliseconds"),
+            "ts_ms": p.ts_ms,
+            "x": p.x,
+            "y": p.y,
+            "z": p.z,
+            "v": None if math.isnan(p.speed) else p.speed,
+            "a": None if math.isnan(p.accel) else p.accel,
+            "dir": p.direction,
+        }
+        for p in window_points
+    ]
+    # Max velocity/acceleration over the throw trajectory (w.r.t. the ball points).
+    finite_vs = [p["v"] for p in trajectory if p["v"] is not None]
+    finite_as = [p["a"] for p in trajectory if p["a"] is not None]
+    max_v = max(finite_vs) if finite_vs else None
+    max_a = max(finite_as) if finite_as else None
+    # Velocity/acceleration derived from the positions themselves (finite
+    # differences over time), independent of the fixture CSV's speed/accel columns.
+    computed_speeds, computed_accels = compute_velocity_acceleration_from_points(window_points)
     return {
         "fixture_file": str(fixture_path),
-        "trajectory": [
-            {
-                "t_local": p.local_dt.isoformat(timespec="milliseconds"),
-                "ts_ms": p.ts_ms,
-                "x": p.x,
-                "y": p.y,
-                "z": p.z,
-                "v": None if math.isnan(p.speed) else p.speed,
-                "a": None if math.isnan(p.accel) else p.accel,
-                "dir": p.direction,
-            }
-            for p in points[start_idx:end_idx + 1]
-        ],
-        "release_idx": release_idx,
+        "trajectory": trajectory,
+        "max_v": max_v,
+        "max_a": max_a,
+        "velocity_per_point": computed_speeds,
+        "acceleration_per_point": computed_accels,
+        "release_idx": release_idx_local,
+        "release_idx_global": release_idx_global,
         "release_point": {
             "t_local": release_point.local_dt.isoformat(timespec="milliseconds"),
             "ts_ms": release_point.ts_ms,
@@ -610,9 +687,14 @@ def process_penalties_csv(penalties_csv: Path, positions_dir: Path, output_csv: 
             "release_speed": result.get("release_speed"),
             "release_accel": result.get("release_accel"),
             "release_direction": result.get("release_direction"),
+            "max_v": result.get("max_v"),
+            "max_a": result.get("max_a"),
+            "velocity_per_point": result.get("velocity_per_point", []),
+            "acceleration_per_point": result.get("acceleration_per_point", []),
             "trajectory_json": json.dumps(result.get("trajectory", []), ensure_ascii=False, separators=(",", ":")),
             "trajectory_point_count": result.get("trajectory_points", 0),
             "release_idx": result.get("release_idx"),
+            "release_idx_global": result.get("release_idx_global"),
             "error": result.get("error", ""),
         }
         records.append(record)
@@ -633,15 +715,49 @@ def process_penalties_csv(penalties_csv: Path, positions_dir: Path, output_csv: 
         "release_speed",
         "release_accel",
         "release_direction",
+        "max_v",
+        "max_a",
+        "velocity_per_point",
+        "acceleration_per_point",
         "trajectory_json",
         "trajectory_point_count",
         "release_idx",
+        "release_idx_global",
         "error",
     ]
     with output_csv.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter=";")
         writer.writeheader()
         writer.writerows(records)
+
+    # Separate kinematics CSV in the same output directory: per-throw lists of
+    # velocity (m/s) and acceleration (m/s^2) computed from the trajectory's
+    # positions (finite differences), one row per penalty id.
+    kinematics_csv = output_csv.parent / (output_csv.stem + "_kinematics" + output_csv.suffix)
+    with kinematics_csv.open("w", encoding="utf-8", newline="") as handle:
+        kin_writer = csv.DictWriter(
+            handle,
+            fieldnames=["id", "velocity_per_point", "acceleration_per_point"],
+            delimiter=";",
+        )
+        kin_writer.writeheader()
+        for record in records:
+            kin_writer.writerow(
+                {
+                    "id": record["id"],
+                    "velocity_per_point": json.dumps(
+                        record.get("velocity_per_point", []),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    "acceleration_per_point": json.dumps(
+                        record.get("acceleration_per_point", []),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                }
+            )
+    logger.info("Kinematics CSV written to %s", kinematics_csv)
 
     errors = [r for r in records if r.get("error")]
     if errors and errors_csv is not None:

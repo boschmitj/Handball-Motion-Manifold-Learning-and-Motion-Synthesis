@@ -22,15 +22,22 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import json
+import logging
 import math
 import random
 from collections import defaultdict
 from datetime import timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+import pandas as pd
 
 from ball_trajectory import (
+    BallPoint,
+    GoalkeeperPoint,
+    PossessionContextPoint,
     adjust_start_idx_by_distance,
     extract_goalkeeper_trajectory,
     find_goalline_crossing_idx,
@@ -55,7 +62,12 @@ from fixture_resolution import (
     resolve_fixture_file,
     should_skip_penalty_row,
 )
-from penalty_time_utils import parse_penalty_local_time, try_float
+from penalty_time_utils import parse_penalty_local_time, parse_position_local_time, try_float
+
+
+# Module-level logger. Configured in main(); defaults to WARNING so library
+# use does not spam stdout unless the caller opts in.
+logger = logging.getLogger("penalty_processing")
 
 
 # A trajectory longer than this many points (at 20 Hz ~ 3 s) is considered
@@ -63,6 +75,179 @@ from penalty_time_utils import parse_penalty_local_time, try_float
 MAX_TRAJECTORY_POINT_COUNT = 60
 # Number of extra frames prepended to the trajectory for visualization context.
 PREPEND_FRAME_COUNT = 5
+
+
+class FixtureCache:
+    """Single-entry cache for loaded fixture data.
+
+    Fixtures are processed in contiguous blocks (grouped_rows), so keeping only
+    the currently-loaded fixture in memory avoids accumulating many large files
+    while still avoiding repeated reads of the same file.
+    """
+
+    def __init__(self) -> None:
+        self._current_path: Optional[Path] = None
+        self._current_data: Optional[Dict[str, Any]] = None
+
+    def get_data(self, path: Path) -> Dict[str, Any]:
+        # Resolve path to a stable absolute path for comparisons and caching.
+        try:
+            resolved = path.resolve()
+        except Exception:
+            resolved = path
+
+        # If requested path is already loaded, return cached data.
+        if self._current_path == resolved and self._current_data is not None:
+            return self._current_data
+
+        # Load via pandas-backed loader (single pass over the file).
+        data = _load_fixture_data(path)
+        self._current_path = resolved
+        self._current_data = data
+        # Trigger GC to free previous large DataFrames if any.
+        gc.collect()
+        return data
+
+    def prefetch(self, path: Path) -> None:
+        try:
+            _ = self.get_data(path)
+        except Exception:
+            pass
+
+
+def _coerce_text(value: Any) -> str:
+    return "" if value is None else str(value).strip()
+
+
+def _load_fixture_data(positions_file: Path) -> Dict[str, Any]:
+    """Load ball, goalkeeper, and possession points from a fixture file in one pass.
+
+    Uses pandas with column selection so the file is read only once instead of
+    three separate csv passes (one per loader in ball_trajectory). Falls back
+    to the original csv-based loaders if pandas fails.
+    """
+    usecols = [
+        "group name",
+        "formatted local time",
+        "x in m",
+        "y in m",
+        "z in m",
+        "ts in ms",
+        "speed in m/s",
+        "acceleration in m/s2",
+        "direction of movement in deg",
+        "sensor id",
+        "mapped id",
+        "full name",
+        "ball possession (id of possessed ball)",
+    ]
+    try:
+        df = pd.read_csv(positions_file, delimiter=";", usecols=usecols, dtype=str, low_memory=True)
+    except Exception:
+        # Fall back to the original csv-based loaders if pandas fails.
+        return {
+            "ball": load_ball_points(positions_file),
+            "goalkeeper": load_goalkeeper_candidates(positions_file),
+            "possession": load_possession_context_candidates(positions_file),
+        }
+
+    # Parse datetime strings into python datetimes using the existing parser.
+    df["local_dt"] = df["formatted local time"].map(lambda s: parse_position_local_time(_coerce_text(s)))
+
+    # Convert numeric columns.
+    for col in ["x in m", "y in m", "z in m", "ts in ms", "speed in m/s", "acceleration in m/s2", "direction of movement in deg"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Drop rows with invalid time or position.
+    df = df[df["local_dt"].notna() & df["x in m"].notna() & df["y in m"].notna() & df["z in m"].notna()]
+
+    # Split into ball rows and non-ball rows.
+    is_ball = df["group name"].str.strip() == "Ball"
+    ball_rows = df[is_ball]
+    non_ball_rows = df[~is_ball]
+
+    # --- Ball points ---
+    ball_points: List[BallPoint] = []
+    for _, row in ball_rows.iterrows():
+        ts_val = row.get("ts in ms")
+        ts_ms = int(ts_val) if not pd.isna(ts_val) else None
+        speed = float(row["speed in m/s"]) if not pd.isna(row.get("speed in m/s")) else float("nan")
+        accel = float(row["acceleration in m/s2"]) if not pd.isna(row.get("acceleration in m/s2")) else float("nan")
+        direction = float(row["direction of movement in deg"]) if not pd.isna(row.get("direction of movement in deg")) else None
+        ball_points.append(
+            BallPoint(
+                local_dt=row["local_dt"],
+                ts_ms=ts_ms,
+                x=float(row["x in m"]),
+                y=float(row["y in m"]),
+                z=float(row["z in m"]),
+                speed=speed,
+                accel=accel,
+                direction=direction,
+            )
+        )
+    ball_points.sort(key=lambda p: (p.local_dt, p.ts_ms if p.ts_ms is not None else -1))
+
+    # --- Goalkeeper candidates ---
+    goalkeeper_points: List[GoalkeeperPoint] = []
+    for _, row in non_ball_rows.iterrows():
+        x = float(row["x in m"])
+        y = float(row["y in m"])
+        # Restrict to likely goalkeeper area near either goal.
+        if not (16.0 <= abs(x) <= 20.0 and abs(y) <= 1.5):
+            continue
+        ts_val = row.get("ts in ms")
+        ts_ms = int(ts_val) if not pd.isna(ts_val) else None
+        sensor_id = (
+            _coerce_text(row.get("sensor id"))
+            or _coerce_text(row.get("mapped id"))
+            or _coerce_text(row.get("full name"))
+            or "unknown"
+        )
+        goalkeeper_points.append(
+            GoalkeeperPoint(
+                local_dt=row["local_dt"],
+                ts_ms=ts_ms,
+                x=x,
+                y=y,
+                z=float(row["z in m"]),
+                sensor_id=sensor_id,
+            )
+        )
+    goalkeeper_points.sort(key=lambda p: (p.sensor_id, p.local_dt, p.ts_ms if p.ts_ms is not None else -1))
+
+    # --- Possession context points ---
+    possession_points: List[PossessionContextPoint] = []
+    for _, row in non_ball_rows.iterrows():
+        ts_val = row.get("ts in ms")
+        ts_ms = int(ts_val) if not pd.isna(ts_val) else None
+        speed = float(row["speed in m/s"]) if not pd.isna(row.get("speed in m/s")) else float("nan")
+        accel = float(row["acceleration in m/s2"]) if not pd.isna(row.get("acceleration in m/s2")) else float("nan")
+        direction = float(row["direction of movement in deg"]) if not pd.isna(row.get("direction of movement in deg")) else None
+        possession_points.append(
+            PossessionContextPoint(
+                local_dt=row["local_dt"],
+                ts_ms=ts_ms,
+                x=float(row["x in m"]),
+                y=float(row["y in m"]),
+                z=float(row["z in m"]),
+                speed=speed,
+                accel=accel,
+                direction=direction,
+                group_name=_coerce_text(row.get("group name")),
+                full_name=_coerce_text(row.get("full name")),
+                sensor_id=_coerce_text(row.get("sensor id")),
+                possession_id=_coerce_text(row.get("ball possession (id of possessed ball)")),
+            )
+        )
+    possession_points.sort(key=lambda p: (p.local_dt, p.ts_ms if p.ts_ms is not None else -1))
+
+    return {
+        "ball": ball_points,
+        "goalkeeper": goalkeeper_points,
+        "possession": possession_points,
+    }
 
 
 def _build_trajectory_window(
@@ -163,7 +348,7 @@ def process_penalties(
     # Filter first by penalty_id, if provided -> limits rows to only 1 row
     if penalty_id is not None:
         rows = [row for row in rows if row.get("id", "").strip() == str(penalty_id)]
-        print(f"Filtered to penalty id {penalty_id}: {len(rows)}/{total_rows}", flush=True)
+        logger.info("Filtered to penalty id %s: %d/%d", penalty_id, len(rows), total_rows)
         if not rows:
             raise SystemExit(f"No penalty with id {penalty_id} found in {penalties_file}")
 
@@ -172,22 +357,24 @@ def process_penalties(
         rows = [r for r in rows if is_successful_penalty(r)]
     # Filter out throws which started at 00:00, 30:00, 60:00 -> TODO: Need to check if there is some better way to skip errornous throws, as 30:00 and 60:00 is possible
     rows = [r for r in rows if not should_skip_penalty_row(r)]
-    print(
-        f"Filtered to {'all shots' if include_unsuccessful else 'successful shots'}: {len(rows)}/{total_rows}",
-        flush=True,
+    logger.info(
+        "Filtered to %s: %d/%d",
+        "all shots" if include_unsuccessful else "successful shots",
+        len(rows),
+        total_rows,
     )
 
     # Run directory is named after running count and time appended.
     run_dir = create_run_folder(output_dir)
     output_file = run_dir / "penalty_trajectories.csv"
     issues_file = run_dir / "penalty_trajectories_issues.csv"
-    print(f"Output directory: {run_dir}", flush=True)
+    logger.info("Output directory: %s", run_dir)
 
     # Edge case for test run (with some random rows or the first k rows)
     if random_test is not None:
         if random_test < len(rows):
             rows = random.sample(rows, random_test)
-            print(f"Random test mode: selected {len(rows)} penalties", flush=True)
+            logger.info("Random test mode: selected %d penalties", len(rows))
     elif limit is not None:
         rows = rows[:limit]
 
@@ -221,13 +408,18 @@ def process_penalties(
     # For debugging
     skipped_by_point_count = 0
 
+    # Single-entry fixture cache: each fixture file is read once (pandas-backed,
+    # single pass) and reused for all its penalty rows.
+    fixture_cache = FixtureCache()
+
     for fixture_file, fixture_rows in grouped_rows.items():
         # Load ball points and potential goalkeeper points (will get reevaluated later)
-        # TODO: Optimize here -> Preload fixture files to reduce main overhead of loading a big csv file for ball processing (collecting ball points and goalkeeper points)
+        logger.info("Loading fixture %s (%d penalties)", fixture_file.name, len(fixture_rows))
         try:
-            points = load_ball_points(fixture_file)
-            goalkeeper_candidates = load_goalkeeper_candidates(fixture_file)
-            possession_candidates = load_possession_context_candidates(fixture_file)
+            fixture_data = fixture_cache.get_data(fixture_file)
+            points = fixture_data["ball"]
+            goalkeeper_candidates = fixture_data["goalkeeper"]
+            possession_candidates = fixture_data["possession"]
         except Exception as exc:
             for idx, row in fixture_rows:
                 unresolved.append(
@@ -256,7 +448,13 @@ def process_penalties(
 
         # Process a penalty row
         for idx, row in fixture_rows:
-            print(f"Processing penalty row {idx+1}/{len(rows)} id:{row.get('id','')} fixture:{fixture_file.name}", flush=True)
+            logger.info(
+                "Processing penalty row %d/%d id:%s fixture:%s",
+                idx + 1,
+                len(rows),
+                row.get("id", ""),
+                fixture_file.name,
+            )
             flags: List[str] = []
             # Load time (seperate function here)
             # Parse the shot's local timestamp from the penalty row.
@@ -512,15 +710,17 @@ def process_penalties(
             )
 
     # Print a summary of the run.
-    print("=== shot_matcher summary ===")
-    print(f"Penalties input rows: {len(rows)}")
-    print(f"Resolved trajectories: {len(results)}")
-    print(
-        f"Skipped by trajectory point count (>={MAX_TRAJECTORY_POINT_COUNT}): {skipped_by_point_count}"
+    logger.info("=== shot_matcher summary ===")
+    logger.info("Penalties input rows: %d", len(rows))
+    logger.info("Resolved trajectories: %d", len(results))
+    logger.info(
+        "Skipped by trajectory point count (>=%d): %d",
+        MAX_TRAJECTORY_POINT_COUNT,
+        skipped_by_point_count,
     )
-    print(f"Unresolved/issues: {len(unresolved)}")
-    print(f"Output file: {output_file}")
-    print(f"Issues file: {issues_file}")
+    logger.info("Unresolved/issues: %d", len(unresolved))
+    logger.info("Output file: %s", output_file)
+    logger.info("Issues file: %s", issues_file)
 
     return run_dir
 
@@ -573,6 +773,15 @@ def main() -> None:
     parser = build_arg_parser()
     args = parser.parse_args()
 
+    # Configure logging so the user sees which fixture is currently being
+    # processed. Intended for CLI use; library callers can configure the
+    # "penalty_processing" logger themselves.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
     run_dir = process_penalties(
         penalties_file=Path(args.penalties),
         positions_dir=Path(args.positions_dir),
@@ -586,4 +795,4 @@ def main() -> None:
         random_test=args.random_test,
     )
 
-    print(f"\nRun folder: {run_dir}")
+    logger.info("Run folder: %s", run_dir)

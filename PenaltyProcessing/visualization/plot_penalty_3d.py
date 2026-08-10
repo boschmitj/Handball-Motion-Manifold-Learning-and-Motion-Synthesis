@@ -213,8 +213,11 @@ def plot_shot(
         gzs = np.array([float(p.get("z", 0)) for p in goalkeeper_points])
         ax.plot(gxs, gys, gzs, color="black", linewidth=1.8, alpha=0.95, label="goalkeeper")
 
-    # hit position: last point
-    ax.scatter([xs[-1]], [ys[-1]], [zs[-1]], color="black", s=90, marker="X", label="hit")
+    # hit position: first point where the ball crosses the goal line (abs(x) > 20).
+    # Falls back to the last point if no crossing is present in the trajectory.
+    hit_idxs = [i for i, x in enumerate(xs) if abs(x) > 20.0]
+    hit_idx = hit_idxs[0] if hit_idxs else (len(xs) - 1)
+    ax.scatter([xs[hit_idx]], [ys[hit_idx]], [zs[hit_idx]], color="black", s=90, marker="X", label="hit")
 
 
 def format_release_point_label(metadata: Dict[str, Any]) -> str:
