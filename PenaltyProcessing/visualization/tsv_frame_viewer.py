@@ -7,9 +7,9 @@ loading only the selected frame on demand.
 
 Usage
 -----
-python3 src/tsv_frame_viewer.py
-python3 src/tsv_frame_viewer.py --no-bones --ball-mode gt
-python3 src/tsv_frame_viewer.py --frame 500
+python3 visualization/tsv_frame_viewer.py
+python3 visualization/tsv_frame_viewer.py --no-bones --ball-mode gt
+python3 visualization/tsv_frame_viewer.py --frame 500
 """
 
 from __future__ import annotations
@@ -506,13 +506,6 @@ class FrameViewer:
         return center, "ground-truth centre from 6D TSV"
 
     def _fallback_ball(self, positions: Dict[str, np.ndarray]) -> np.ndarray:
-        if "Hips" in positions and np.isfinite(positions["Hips"]).all():
-            return positions["Hips"]
-        for name in ("Spine", "Spine1", "Spine2"):
-            if name in positions and np.isfinite(positions[name]).all():
-                return positions[name]
-        if positions:
-            return np.mean(np.stack(list(positions.values()), axis=0), axis=0)
         return np.zeros(3, dtype=np.float64)
 
     def _active_ball_center(self, frame: int, positions: Dict[str, np.ndarray]) -> Tuple[np.ndarray, str]:
