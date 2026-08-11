@@ -202,7 +202,12 @@ def _row_plot_id(row: Dict[str, Any], fallback_idx: int) -> str:
     return raw_id if raw_id else f"row_{fallback_idx}"
 
 
-def plot_row(row: Dict[str, Any], row_idx: int, output_parent: Path) -> Tuple[Path, Path]:
+def plot_row(
+    row: Dict[str, Any],
+    row_idx: int,
+    output_parent: Path,
+    por_window_frames: Optional[int] = None,
+) -> Tuple[Path, Path]:
     trajectory = _parse_json_list(row.get("trajectory_json"))
     if not trajectory:
         raise ValueError("trajectory_json is empty or invalid")
@@ -210,16 +215,38 @@ def plot_row(row: Dict[str, Any], row_idx: int, output_parent: Path) -> Tuple[Pa
     x, x_label = _trajectory_time_axis_seconds(trajectory)
     n = len(trajectory)
     x = _normalize_length([float(v) for v in x], n)
+    
+    # Extract metrics before windowing
+    fixture_v_full = _extract_fixture_series(trajectory, "v")
+    fixture_a_full = _extract_fixture_series(trajectory, "a")
+    
+    recomputed_v_full = [_to_optional_float(v) for v in _parse_json_list(row.get("velocity_per_point"))]
+    
+    accel_source = row.get("tangential_acceleration_per_point")
+    if accel_source in {None, "", "nan", "null"}:
+        accel_source = row.get("acceleration_per_point")
+    recomputed_a_full = [_to_optional_float(a) for a in _parse_json_list(accel_source)]
 
-    fixture_v = _normalize_length(_extract_fixture_series(trajectory, "v"), n)
-    fixture_a = _normalize_length(_extract_fixture_series(trajectory, "a"), n)
-
-    recomputed_v = _normalize_length(_parse_json_list(row.get("velocity_per_point")), n)
-    recomputed_v = [_to_optional_float(v) for v in recomputed_v]
-
-    recomputed_a = _normalize_length(_parse_json_list(row.get("acceleration_per_point")), n)
-    recomputed_a = [_to_optional_float(a) for a in recomputed_a]
-    por_x = _por_x_position(row, trajectory, x)
+    # Window data around PoR if requested
+    release_idx = _safe_int(row.get("release_idx"))
+    start_idx = 0
+    if por_window_frames is not None and release_idx is not None and release_idx >= 0 and release_idx < len(trajectory):
+        start_idx = max(0, release_idx - por_window_frames)
+        end_idx = min(len(trajectory), release_idx + por_window_frames + 1)
+        trajectory = trajectory[start_idx:end_idx]
+        x = x[start_idx:end_idx]
+        fixture_v_full = fixture_v_full[start_idx:end_idx]
+        fixture_a_full = fixture_a_full[start_idx:end_idx]
+        recomputed_v_full = recomputed_v_full[start_idx:end_idx]
+        recomputed_a_full = recomputed_a_full[start_idx:end_idx]
+        release_idx = release_idx - start_idx
+    
+    n = len(trajectory)
+    fixture_v = _normalize_length(fixture_v_full, n)
+    fixture_a = _normalize_length(fixture_a_full, n)
+    recomputed_v = _normalize_length(recomputed_v_full, n)
+    recomputed_a = _normalize_length(recomputed_a_full, n)
+    
     goal_cross_x = _goal_cross_x_position(trajectory, x)
 
     shot_id = _row_plot_id(row, row_idx)
@@ -230,6 +257,15 @@ def plot_row(row: Dict[str, Any], row_idx: int, output_parent: Path) -> Tuple[Pa
 
     matchup = f"{row.get('home_team', '')} vs {row.get('away_team', '')}".strip()
     title_base = f"id={shot_id} | {matchup}" if matchup else f"id={shot_id}"
+
+    # Adjust PoR x-position if windowing was applied
+    if release_idx >= 0 and release_idx < len(x):
+        por_x = x[release_idx]
+    else:
+        por_x = None
+    
+    # Recompute goal_cross_x for windowed trajectory
+    goal_cross_x = _goal_cross_x_position(trajectory, x)
 
     _plot_pair(
         x=x,
@@ -249,8 +285,8 @@ def plot_row(row: Dict[str, Any], row_idx: int, output_parent: Path) -> Tuple[Pa
         recomputed_values=recomputed_a,
         por_x=por_x,
         goal_cross_x=goal_cross_x,
-        metric_label="acceleration (m/s^2)",
-        title=f"Fixture vs recomputed acceleration | {title_base}",
+        metric_label="signed tangential acceleration (m/s^2)",
+        title=f"Fixture vs recomputed tangential acceleration | {title_base}",
         output_file=a_file,
     )
     return v_file, a_file
@@ -274,6 +310,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional single penalty id to plot",
     )
+    parser.add_argument(
+        "--por-window-frames",
+        type=int,
+        default=None,
+        help="Optional window size (frames on each side of PoR) to zoom into the release region. "
+             "If not provided, plots the entire trajectory.",
+    )
     return parser
 
 
@@ -296,7 +339,12 @@ def main() -> int:
     generated = 0
     for i, row in enumerate(rows.to_dict(orient="records"), start=1):
         try:
-            v_file, a_file = plot_row(row=row, row_idx=i, output_parent=out_parent)
+            v_file, a_file = plot_row(
+                row=row,
+                row_idx=i,
+                output_parent=out_parent,
+                por_window_frames=args.por_window_frames,
+            )
             generated += 1
             print(f"Saved: {v_file}")
             print(f"Saved: {a_file}")

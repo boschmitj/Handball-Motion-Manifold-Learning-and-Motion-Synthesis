@@ -28,7 +28,7 @@ from tsv_frame_viewer import (  # type: ignore
 )
 
 from ball_trajectory import BallPoint
-from release_detector_trajectory_based import select_release_index
+from release_detector_trajectory_based import compute_velocity_acceleration_from_points, select_release_index
 
 FS_HZ = 300.0
 DT_S = 1.0 / FS_HZ
@@ -66,8 +66,8 @@ class ThrowSegment:
 @dataclass
 class MethodResult:
     por_frame: Optional[int]
-    velocity_mm_s: Optional[float]
-    acceleration_mm_s2: Optional[float]
+    velocity_m_s: Optional[float]
+    acceleration_m_s2: Optional[float]
     direction_deg: Optional[float]
     coordinate_mm: Optional[np.ndarray]
 
@@ -300,10 +300,12 @@ def _method_result_at_frame(kinematics: Kinematics, frame: Optional[int]) -> Met
     except ValueError:
         return MethodResult(None, None, None, None, None)
 
+    speed_mm_s = kinematics.speed_mm_s[idx]
+    accel_mm_s2 = kinematics.acceleration_mm_s2[idx]
     return MethodResult(
         por_frame=frame,
-        velocity_mm_s=kinematics.speed_mm_s[idx],
-        acceleration_mm_s2=kinematics.acceleration_mm_s2[idx],
+        velocity_m_s=(None if speed_mm_s is None else speed_mm_s / 1000.0),
+        acceleration_m_s2=(None if accel_mm_s2 is None else accel_mm_s2 / 1000.0),
         direction_deg=kinematics.direction_deg[idx],
         coordinate_mm=np.asarray(kinematics.positions_mm[idx], dtype=np.float64),
     )
@@ -374,32 +376,17 @@ def _detect_method3_por_frame(valid_window_samples: Sequence[BallSample]) -> Opt
 
 def _detect_pre_impact_frame(
     valid_samples: Sequence[BallSample],
-    ground_hit_z_mm: float,
-    y_reversal_epsilon_mm: float = 0.0,
+    pre_impact_y_mm: float,
 ) -> int:
     if not valid_samples:
         raise ValueError("Cannot detect pre-impact frame without valid ball samples")
-    if len(valid_samples) == 1:
-        return valid_samples[0].frame
 
-    for idx in range(1, len(valid_samples) - 1):
-        prev_sample = valid_samples[idx - 1]
-        curr_sample = valid_samples[idx]
-        next_sample = valid_samples[idx + 1]
-
-        prev_center = np.asarray(prev_sample.center_mm, dtype=np.float64)
-        curr_center = np.asarray(curr_sample.center_mm, dtype=np.float64)
-        next_center = np.asarray(next_sample.center_mm, dtype=np.float64)
-
-        dy_prev = curr_center[1] - prev_center[1]
-        dy_next = next_center[1] - curr_center[1]
-        y_reversal = (dy_prev > y_reversal_epsilon_mm) and (dy_next < -y_reversal_epsilon_mm)
-        if y_reversal:
-            return prev_sample.frame
-
-        ground_hit = (curr_center[2] <= ground_hit_z_mm) and (prev_center[2] <= ground_hit_z_mm)
-        if ground_hit:
-            return prev_sample.frame
+    for sample in valid_samples:
+        if sample.center_mm is None:
+            continue
+        center = np.asarray(sample.center_mm, dtype=np.float64)
+        if center[1] > pre_impact_y_mm:
+            return sample.frame
 
     return valid_samples[-1].frame
 
@@ -502,6 +489,177 @@ def _np_to_json_array(value: Optional[np.ndarray], digits: int = 3) -> str:
     return json.dumps(rounded, separators=(",", ":"))
 
 
+def _get_next_output_path(base_path: Path) -> Path:
+    """Generate next available output path with running count to avoid overwriting."""
+    parent = base_path.parent
+    stem = base_path.stem
+    suffix = base_path.suffix
+    
+    # Create parent directory if it doesn't exist
+    parent.mkdir(parents=True, exist_ok=True)
+    
+    # Find next available counter (3-digit zero-padded)
+    counter = 1
+    while True:
+        candidate_name = f"{stem}_{counter:03d}{suffix}"
+        candidate_path = parent / candidate_name
+        if not candidate_path.exists():
+            return candidate_path
+        counter += 1
+
+
+def _samples_to_ball_points_m(samples: Sequence[BallSample]) -> List[BallPoint]:
+    origin = datetime(1970, 1, 1)
+    points: List[BallPoint] = []
+    for sample in samples:
+        if sample.center_mm is None:
+            continue
+        center_m = np.asarray(sample.center_mm, dtype=np.float64) / 1000.0
+        points.append(
+            BallPoint(
+                local_dt=origin + timedelta(seconds=sample.time_s),
+                ts_ms=int(round(sample.time_s * 1000.0)),
+                x=float(center_m[0]),
+                y=float(center_m[1]),
+                z=float(center_m[2]),
+                speed=float("nan"),
+                accel=float("nan"),
+                direction=None,
+            )
+        )
+    return points
+
+
+def _release_idx_in_samples(samples: Sequence[BallSample], por_frame: Optional[int]) -> Optional[int]:
+    if por_frame is None:
+        return None
+    for idx, sample in enumerate(samples):
+        if sample.frame == por_frame:
+            return idx
+    return None
+
+
+def _compute_signed_tangential_acceleration_from_speed(
+    samples: Sequence[BallSample],
+    speeds_m_s: Sequence[Optional[float]],
+) -> List[Optional[float]]:
+    if len(samples) != len(speeds_m_s):
+        raise ValueError("samples and speeds must have the same length")
+
+    n = len(samples)
+    tangential_accel: List[Optional[float]] = [None] * n
+    if n < 2:
+        return tangential_accel
+
+    frames = [sample.frame for sample in samples]
+    for i in range(n):
+        if i == 0:
+            a_idx, b_idx = 0, 1
+        elif i == n - 1:
+            a_idx, b_idx = n - 2, n - 1
+        else:
+            a_idx, b_idx = i - 1, i + 1
+
+        speed_a = speeds_m_s[a_idx]
+        speed_b = speeds_m_s[b_idx]
+        if speed_a is None or speed_b is None:
+            continue
+
+        frame_delta = frames[b_idx] - frames[a_idx]
+        if frame_delta <= 0:
+            continue
+        dt = frame_delta / FS_HZ
+        tangential_accel[i] = float((speed_b - speed_a) / dt)
+
+    return tangential_accel
+
+
+def _build_method_timeseries_row(
+    throw_index: int,
+    method_name: str,
+    segment: ThrowSegment,
+    pre_impact_frame: Optional[int],
+    samples: Sequence[BallSample],
+    kinematics: Kinematics,
+    por_frame: Optional[int],
+    ball_source: str,
+) -> Dict[str, object]:
+    points_m = _samples_to_ball_points_m(samples)
+
+    precomputed_v_m_s: List[Optional[float]] = [
+        None if value is None else float(value) / 1000.0 for value in kinematics.speed_mm_s
+    ]
+    precomputed_tangential_a_m_s2: List[Optional[float]] = [
+        None if value is None else float(value) / 1000.0 for value in kinematics.tangential_accel_mm_s2
+    ]
+
+    trajectory: List[Dict[str, object]] = []
+    for idx, (sample, point) in enumerate(zip(samples, points_m)):
+        trajectory.append(
+            {
+                "frame": int(sample.frame),
+                "t_local": point.local_dt.isoformat(timespec="milliseconds"),
+                "ts_ms": point.ts_ms,
+                "x": point.x,
+                "y": point.y,
+                "z": point.z,
+                "v": precomputed_v_m_s[idx],
+                "a": precomputed_tangential_a_m_s2[idx],
+                "dir": kinematics.direction_deg[idx],
+            }
+        )
+
+    recomputed_v_m_s, _ = compute_velocity_acceleration_from_points(points_m)
+    recomputed_tangential_a_m_s2 = _compute_signed_tangential_acceleration_from_speed(samples, recomputed_v_m_s)
+    release_idx = _release_idx_in_samples(samples, por_frame)
+    release_time_local = trajectory[release_idx]["t_local"] if release_idx is not None else ""
+    release_point_json = (
+        json.dumps(trajectory[release_idx], ensure_ascii=False, separators=(",", ":"))
+        if release_idx is not None
+        else "{}"
+    )
+
+    return {
+        "id": f"throw_{throw_index:03d}_{method_name}",
+        "method": method_name,
+        "throw_index": throw_index,
+        "throw_segment": f"{segment.start_frame}-{segment.end_frame}",
+        "segment_start": segment.start_frame,
+        "holding_por_frame": segment.end_frame,
+        "pre_impact_frame": pre_impact_frame,
+        "release_idx": release_idx,
+        "release_frame_global": por_frame,
+        "release_point_json": release_point_json,
+        "trajectory_json": json.dumps(trajectory, ensure_ascii=False, separators=(",", ":")),
+        "velocity_per_point": json.dumps(recomputed_v_m_s, ensure_ascii=False, separators=(",", ":")),
+        "tangential_acceleration_per_point": json.dumps(recomputed_tangential_a_m_s2, ensure_ascii=False, separators=(",", ":")),
+        "ball_source": ball_source,
+    }
+
+
+def _write_method_timeseries_csv(path: Path, rows: Sequence[Dict[str, object]]) -> None:
+    fieldnames = [
+        "id",
+        "method",
+        "throw_index",
+        "throw_segment",
+        "segment_start",
+        "holding_por_frame",
+        "pre_impact_frame",
+        "release_idx",
+        "release_frame_global",
+        "release_point_json",
+        "trajectory_json",
+        "velocity_per_point",
+        "tangential_acceleration_per_point",
+        "ball_source",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter=";")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def run_pipeline(
     skeleton_path: Path,
     ball_3d_path: Path,
@@ -513,6 +671,7 @@ def run_pipeline(
     baseline_min_samples: int,
     baseline_std_floor_mm: float,
     ground_hit_z_mm: float,
+    pre_impact_y_mm: float,
 ) -> Path:
     skeleton_index = index_skeleton_file(skeleton_path)
     ball_3d_index = index_ball_3d_file(ball_3d_path)
@@ -554,7 +713,9 @@ def run_pipeline(
     )
 
     records: List[Dict[str, object]] = []
+    timeseries_records: List[Dict[str, object]] = []
     for segment_idx, segment in enumerate(segments):
+        throw_index = segment_idx + 1
         next_start = segments[segment_idx + 1].start_frame if segment_idx + 1 < len(segments) else shared_frames[-1] + 1
         segment_search_end = max(segment.end_frame, next_start - 1)
 
@@ -572,7 +733,10 @@ def run_pipeline(
             method3 = MethodResult(None, None, None, None, None)
             valid_count = 0
         else:
-            pre_impact_frame = _detect_pre_impact_frame(valid_window_samples, ground_hit_z_mm=ground_hit_z_mm)
+            pre_impact_frame = _detect_pre_impact_frame(
+                valid_window_samples,
+                pre_impact_y_mm=pre_impact_y_mm,
+            )
             pre_impact_samples = [sample for sample in valid_window_samples if sample.frame <= pre_impact_frame]
             valid_count = len(pre_impact_samples)
 
@@ -590,21 +754,58 @@ def run_pipeline(
             method3_frame = _detect_method3_por_frame(pre_impact_samples)
             method3 = _method_result_at_frame(kinematics, method3_frame)
 
+            timeseries_records.append(
+                _build_method_timeseries_row(
+                    throw_index=throw_index,
+                    method_name="method1",
+                    segment=segment,
+                    pre_impact_frame=pre_impact_frame,
+                    samples=valid_window_samples,
+                    kinematics=full_kinematics,
+                    por_frame=method1.por_frame,
+                    ball_source=ball_source,
+                )
+            )
+            timeseries_records.append(
+                _build_method_timeseries_row(
+                    throw_index=throw_index,
+                    method_name="method2",
+                    segment=segment,
+                    pre_impact_frame=pre_impact_frame,
+                    samples=pre_impact_samples,
+                    kinematics=kinematics,
+                    por_frame=method2.por_frame,
+                    ball_source=ball_source,
+                )
+            )
+            timeseries_records.append(
+                _build_method_timeseries_row(
+                    throw_index=throw_index,
+                    method_name="method3",
+                    segment=segment,
+                    pre_impact_frame=pre_impact_frame,
+                    samples=pre_impact_samples,
+                    kinematics=kinematics,
+                    por_frame=method3.por_frame,
+                    ball_source=ball_source,
+                )
+            )
+
         records.append(
             {
                 "PoR_method1": method1.por_frame,
-                "acceleration_method1": method1.acceleration_mm_s2,
-                "velocity_method1": method1.velocity_mm_s,
+                "acceleration_method1": method1.acceleration_m_s2,
+                "velocity_method1": method1.velocity_m_s,
                 "direction_method1": method1.direction_deg,
                 "coordinate_method1": _np_to_json_array(method1.coordinate_mm),
                 "PoR_method2": method2.por_frame,
-                "acceleration_method2": method2.acceleration_mm_s2,
-                "velocity_method2": method2.velocity_mm_s,
+                "acceleration_method2": method2.acceleration_m_s2,
+                "velocity_method2": method2.velocity_m_s,
                 "direction_method2": method2.direction_deg,
                 "coordinate_method2": _np_to_json_array(method2.coordinate_mm),
                 "PoR_method3": method3.por_frame,
-                "acceleration_method3": method3.acceleration_mm_s2,
-                "velocity_method3": method3.velocity_mm_s,
+                "acceleration_method3": method3.acceleration_m_s2,
+                "velocity_method3": method3.velocity_m_s,
                 "direction_method3": method3.direction_deg,
                 "coordinate_method3": _np_to_json_array(method3.coordinate_mm),
                 "throw_segment": f"{segment.start_frame}-{segment.end_frame}",
@@ -616,6 +817,7 @@ def run_pipeline(
                 "method1_baseline_mean_mm": segment.baseline_mean_mm,
                 "method1_baseline_std_mm": segment.baseline_std_mm,
                 "method1_release_distance_mm": segment.distance_at_release_mm,
+                "pre_impact_y_threshold_mm": pre_impact_y_mm,
                 "ball_source": ball_source,
             }
         )
@@ -646,12 +848,16 @@ def run_pipeline(
         "method1_baseline_mean_mm",
         "method1_baseline_std_mm",
         "method1_release_distance_mm",
+        "pre_impact_y_threshold_mm",
         "ball_source",
     ]
     with output_csv.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter=";")
         writer.writeheader()
         writer.writerows(records)
+
+    timeseries_csv = output_csv.with_name(output_csv.stem + "_timeseries" + output_csv.suffix)
+    _write_method_timeseries_csv(timeseries_csv, timeseries_records)
 
     print(f"Shared frames: {len(shared_frames)}")
     print(f"Detected throws: {len(records)}")
@@ -664,6 +870,7 @@ def run_pipeline(
             f"valid={row['ball_valid_samples_preimpact']} invalid={row['ball_invalid_samples_in_segment']}"
         )
     print(f"Comparison CSV written to {output_csv}")
+    print(f"Method timeseries CSV written to {timeseries_csv}")
     return output_csv
 
 
@@ -697,19 +904,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ball-source",
         choices=("gt", "fit"),
-        default="gt",
+        default="fit",
         help="Ball centre source: gt=6D, fit=6DOF sphere fit",
     )
     parser.add_argument(
         "--output-csv",
         type=Path,
-        default=root / "out" / "por_method_comparison.csv",
-        help="Output comparison CSV",
+        default=root / "mocap_por" / "por_method_comparison.csv",
+        help="Output comparison CSV (will be appended with running count to avoid overwriting)",
     )
     parser.add_argument(
         "--reacquire-distance-mm",
         type=float,
-        default=250.0,
+        default=120.0,
         help="Distance threshold for False->True holding transition",
     )
     parser.add_argument(
@@ -721,7 +928,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--baseline-min-samples",
         type=int,
-        default=20,
+        default=100,
         help="Minimum holding samples required before Method-1 release can trigger",
     )
     parser.add_argument(
@@ -734,24 +941,35 @@ def build_parser() -> argparse.ArgumentParser:
         "--ground-hit-z-mm",
         type=float,
         default=180.0,
-        help="Ground-hit z threshold in mm (existing detector uses 0.18 m)",
+        help="Deprecated in pre-impact detection; retained for CLI compatibility",
+    )
+    parser.add_argument(
+        "--pre-impact-y-mm",
+        type=float,
+        default=1750.0,
+        help="Pre-impact boundary: first valid sample with Y > threshold (mm)",
     )
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
+    
+    # Generate output path with running count to avoid overwriting
+    output_csv = _get_next_output_path(args.output_csv)
+    
     run_pipeline(
         skeleton_path=args.skeleton,
         ball_3d_path=args.ball_3d,
         ball_6d_path=args.ball_6d,
         ball_source=args.ball_source,
-        output_csv=args.output_csv,
+        output_csv=output_csv,
         reacquire_distance_mm=args.reacquire_distance_mm,
         sigma_multiplier=args.sigma_multiplier,
         baseline_min_samples=args.baseline_min_samples,
         baseline_std_floor_mm=args.baseline_std_floor_mm,
         ground_hit_z_mm=args.ground_hit_z_mm,
+        pre_impact_y_mm=args.pre_impact_y_mm,
     )
     return 0
 
