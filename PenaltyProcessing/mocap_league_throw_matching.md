@@ -14,6 +14,18 @@
     Exact goal impact is given from penalties.csv row for throw id.
   * Mocap trajectories may end early. Therefore, exact trajectory endpoints, exact goal impact, or exact trajectory peak cannot be assumed to be available.
 
+Prompt First Step:
+Please do the mocap coordinate translation. So that 0,0,0 becomes 0, 12.6m, 0. Also convert mm to m. 
+This should be incorporated into src/create_throw_representation.py
+This file puts the puzzle up to this point together. It creates a simple_penalty_trajectories.csv with release_detector_trajectory_based.py with only the successful shots and those without deflection all mapped to same side.
+It then uses mocap_por_detection pipeline to possibly parse multiple throws, with swap-xy enabled and the matching ball 3d and skeleton data for this throw (Throws will be organized into folders "throw_type" with subfolders for body, skeleton and ball data files). The throw_type directory to select will be passed to the create_throw_representation script. 
+It should also translate the mocap points in xy plane (as discussed).
+It should then write csv's containing the throw_id (for league data coming from the penalties.csv file, for the mocap throws just counting), The trajectory of the free flight, starting with the PoR, ending after crossing goal line (for league) or at the end found in @/PenaltyProcessing/src/mocap_por_detection_pipeline.py (for mocap data, so when ball either becomes unidentified or hits wall). It then writes csv's containing the release coords, velocity, acceleration, direction and the trajectory_json, containing the ball points (including coords, velocity vector, acceleration vector, magnitude of acceleration and velocity each, t_since_release, direction) and trajectory_point_count and trajectory_duration_ms as well as error/valid column and source.
+IMPORTANT: Make sure that the velocity and acceleration are recomputed for data from the fixture files. Make sure that this computation is done in exactly the same way as for mocap throws.
+From this a csv raw_mocap and a csv raw_league should be created.
+
+Furthermore, a third csv should be created containing the throw id, trajectory_json_list of the whole mocap throw, so from throw segment start as found by mocap_por_detection_pipeline to throw end (as discussed earlier) and the index relative to that list, where the PoR is. And lastly also the global indices for segment start, PoR. Use also the recalculated ball center positions here.
+
 * **Canonical coordinate system:**
 
   * League convention: `+x = towards goal`, `y = lateral`, `z = vertical`.
