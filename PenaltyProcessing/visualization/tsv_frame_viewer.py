@@ -2,14 +2,16 @@
 
 The viewer overlays the body skeleton TSV with either the fitted ball centre
 from the 6DOF marker spheres or the ground-truth ball centre from the 6D TSV.
-It is designed to stay responsive by indexing frame offsets first and then
-loading only the selected frame on demand.
+It can additionally overlay the raw body markers from the body TSV. It is
+designed to stay responsive by indexing frame offsets first and then loading
+only the selected frame on demand.
 
 Usage
 -----
 python3 visualization/tsv_frame_viewer.py
 python3 visualization/tsv_frame_viewer.py --no-bones --ball-mode gt
 python3 visualization/tsv_frame_viewer.py --frame 500
+python3 visualization/tsv_frame_viewer.py --body path/to/body.tsv
 """
 
 from __future__ import annotations
@@ -132,6 +134,47 @@ def index_skeleton_file(path: Path) -> FrameIndex:
     return FrameIndex(path, frame_to_offset, sorted(set(frames)), bounds_min, bounds_max, segment_names)
 
 
+def index_body_file(path: Path) -> FrameIndex:
+    frame_to_offset: Dict[int, int] = {}
+    frames: List[int] = []
+    bounds_min = np.array([np.inf, np.inf, np.inf], dtype=np.float64)
+    bounds_max = np.array([-np.inf, -np.inf, -np.inf], dtype=np.float64)
+    marker_names: Optional[List[str]] = None
+
+    for offset, line, _ in _read_lines(path):
+        if not line:
+            continue
+        row = line.split("\t")
+        if row[0].strip() == "Frame":
+            names: List[str] = []
+            for idx in range(2, len(row), 3):
+                raw_name = row[idx].strip()
+                if raw_name:
+                    names.append(raw_name.rsplit(" ", 1)[0])
+            marker_names = names
+            continue
+
+        if len(row) < 5:
+            continue
+        frame = _parse_float(row[0])
+        if frame is None:
+            continue
+        frame_number = int(frame)
+        frame_to_offset[frame_number] = offset
+        frames.append(frame_number)
+
+        for idx in range(2, len(row), 3):
+            x = _parse_float(row[idx]) if idx < len(row) else None
+            y = _parse_float(row[idx + 1]) if idx + 1 < len(row) else None
+            z = _parse_float(row[idx + 2]) if idx + 2 < len(row) else None
+            if _is_valid_xyz((x, y, z)):
+                values = np.array([x, y, z], dtype=np.float64)
+                bounds_min = np.minimum(bounds_min, values)
+                bounds_max = np.maximum(bounds_max, values)
+
+    return FrameIndex(path, frame_to_offset, sorted(set(frames)), bounds_min, bounds_max, marker_names)
+
+
 def index_ball_3d_file(path: Path) -> FrameIndex:
     frame_to_offset: Dict[int, int] = {}
     frames: List[int] = []
@@ -204,6 +247,33 @@ def parse_skeleton_row_cached(
         x = _parse_float(row[base_idx + 1])
         y = _parse_float(row[base_idx + 2])
         z = _parse_float(row[base_idx + 3])
+        if name and _is_valid_xyz((x, y, z)):
+            positions[name] = np.array([x, y, z], dtype=np.float64)
+    return frame, time_s, positions
+
+
+@lru_cache(maxsize=256)
+def parse_body_row_cached(
+    path_str: str,
+    offset: int,
+    marker_names: Tuple[str, ...],
+) -> Tuple[int, float, Dict[str, np.ndarray]]:
+    path = Path(path_str)
+    with path.open("rb") as handle:
+        handle.seek(offset)
+        line = handle.readline().decode("utf-8", errors="replace").rstrip("\r\n")
+
+    row = line.split("\t")
+    frame = int(float(row[0]))
+    time_s = float(row[1])
+    positions: Dict[str, np.ndarray] = {}
+    for marker_idx, name in enumerate(marker_names):
+        base_idx = 2 + marker_idx * 3
+        if base_idx + 2 >= len(row):
+            continue
+        x = _parse_float(row[base_idx])
+        y = _parse_float(row[base_idx + 1])
+        z = _parse_float(row[base_idx + 2])
         if name and _is_valid_xyz((x, y, z)):
             positions[name] = np.array([x, y, z], dtype=np.float64)
     return frame, time_s, positions
@@ -366,20 +436,25 @@ class FrameViewer:
         skeleton_index: FrameIndex,
         ball_3d_index: FrameIndex,
         ball_6d_index: FrameIndex,
-        use_bones: bool,
-        ball_mode: str,
-        start_frame: Optional[int],
+        body_index: Optional[FrameIndex] = None,
+        use_bones: bool = True,
+        ball_mode: str = "fit",
+        start_frame: Optional[int] = None,
+        show_raw_markers: bool = False,
     ) -> None:
         self.skeleton_index = skeleton_index
         self.ball_3d_index = ball_3d_index
         self.ball_6d_index = ball_6d_index
+        self.body_index = body_index
         self.use_bones = use_bones
         self.ball_mode = ball_mode
-        self.shared_frames = sorted(
-            set(skeleton_index.frames) & set(ball_3d_index.frames) & set(ball_6d_index.frames)
-        )
+        self.show_raw_markers = show_raw_markers
+        frame_sets = [set(skeleton_index.frames), set(ball_3d_index.frames), set(ball_6d_index.frames)]
+        if body_index is not None:
+            frame_sets.append(set(body_index.frames))
+        self.shared_frames = sorted(set.intersection(*frame_sets))
         if not self.shared_frames:
-            raise ValueError("No common frames across skeleton, ball 3D, and ball 6D files")
+            raise ValueError("No common frames across the provided files")
 
         self.frame_idx = choose_nearest_frame(self.shared_frames, start_frame)
 
@@ -392,14 +467,19 @@ class FrameViewer:
         self.prev_button_ax = self.fig.add_axes([0.79, 0.10, 0.08, 0.05])
         self.next_button_ax = self.fig.add_axes([0.88, 0.10, 0.08, 0.05])
         self.slider_ax = self.fig.add_axes([0.10, 0.05, 0.60, 0.03])
-        self.check_ax = self.fig.add_axes([0.80, 0.25, 0.16, 0.14])
+        self.check_ax = self.fig.add_axes([0.80, 0.22, 0.16, 0.17])
         self.info_ax = self.fig.add_axes([0.77, 0.42, 0.20, 0.55])
         self.info_ax.axis("off")
 
         self.prev_button = Button(self.prev_button_ax, "Prev")
         self.next_button = Button(self.next_button_ax, "Next")
         self.slider = Slider(self.slider_ax, "Frame", 0, len(self.shared_frames) - 1, valinit=self.frame_idx, valstep=1)
-        self.checks = CheckButtons(self.check_ax, ["Bones", "GT ball"], [self.use_bones, self.ball_mode == "gt"])
+        check_labels = ["Bones", "GT ball"]
+        check_states = [self.use_bones, self.ball_mode == "gt"]
+        if self.body_index is not None:
+            check_labels.append("Raw markers")
+            check_states.append(self.show_raw_markers)
+        self.checks = CheckButtons(self.check_ax, check_labels, check_states)
 
         self.prev_button.on_clicked(lambda _event: self.step(-1))
         self.next_button.on_clicked(lambda _event: self.step(1))
@@ -412,6 +492,7 @@ class FrameViewer:
             "bones": "#1b1b1b",
             "ball": "#ff6b35",
             "fallback": "#8e44ad",
+            "raw": "#27ae60",
         }
 
         self.base_bounds_min = np.array(self._bound_min(), dtype=np.float64)
@@ -424,6 +505,8 @@ class FrameViewer:
             self.ball_3d_index.bounds_min,
             self.ball_6d_index.bounds_min,
         ]
+        if self.body_index is not None:
+            candidates.append(self.body_index.bounds_min)
         finite_candidates = [candidate for candidate in candidates if np.isfinite(candidate).all()]
         if not finite_candidates:
             return np.array([-1000.0, -1000.0, -1000.0], dtype=np.float64)
@@ -436,6 +519,8 @@ class FrameViewer:
             self.ball_3d_index.bounds_max,
             self.ball_6d_index.bounds_max,
         ]
+        if self.body_index is not None:
+            candidates.append(self.body_index.bounds_max)
         finite_candidates = [candidate for candidate in candidates if np.isfinite(candidate).all()]
         if not finite_candidates:
             return np.array([1000.0, 1000.0, 1000.0], dtype=np.float64)
@@ -452,6 +537,7 @@ class FrameViewer:
         active = {text.get_text(): self.checks.get_status()[idx] for idx, text in enumerate(self.checks.labels)}
         self.use_bones = active.get("Bones", self.use_bones)
         self.ball_mode = "gt" if active.get("GT ball", False) else "fit"
+        self.show_raw_markers = active.get("Raw markers", self.show_raw_markers)
         self.update()
 
     def on_key(self, event) -> None:
@@ -541,6 +627,25 @@ class FrameViewer:
     def _draw_ball(self, center: np.ndarray) -> None:
         draw_sphere(self.ax, center, BALL_RADIUS_MM, self.color_map["ball"], alpha=0.75, resolution=12)
 
+    def _draw_raw_markers(self, frame: int) -> None:
+        if self.body_index is None:
+            return
+        offset = self._frame_offset(self.body_index, frame)
+        marker_names = tuple(self.body_index.segment_names or ())
+        _, _, positions = parse_body_row_cached(str(self.body_index.path), offset, marker_names)
+        if not positions:
+            return
+        points = np.vstack(list(positions.values()))
+        self.ax.scatter(
+            points[:, 0],
+            points[:, 1],
+            points[:, 2],
+            color=self.color_map["raw"],
+            s=8,
+            alpha=0.9,
+            depthshade=False,
+        )
+
     def update(self) -> None:
         frame_number = self.shared_frames[self.frame_idx]
         time_s, positions = self._body_positions(frame_number)
@@ -554,7 +659,9 @@ class FrameViewer:
         self.ax.set_ylabel("Y (mm)")
         self.ax.set_zlabel("Z (mm)")
 
-        if self.use_bones:
+        if self.show_raw_markers:
+            self._draw_raw_markers(frame_number)
+        elif self.use_bones:
             self._draw_connections(positions)
         else:
             self._draw_body_points(positions)
@@ -563,7 +670,7 @@ class FrameViewer:
 
         set_axes_equal(self.ax, self.base_bounds_min, self.base_bounds_max)
         self.ax.set_title(
-            f"Frame {frame_number} | time {time_s:.5f} s | bones={'on' if self.use_bones else 'off'} | ball={self.ball_mode}"
+            f"Frame {frame_number} | time {time_s:.5f} s | bones={'on' if self.use_bones else 'off'} | ball={self.ball_mode} | raw={'on' if self.show_raw_markers else 'off'}"
         )
 
         info_lines = [
@@ -573,6 +680,7 @@ class FrameViewer:
             f"Ball mode: {self.ball_mode}",
             f"Ball center: {ball_reason}",
             f"Bones: {'on' if self.use_bones else 'off'}",
+            f"Raw markers: {'on' if self.show_raw_markers else 'off'}",
             "",
             "Keys:",
             "Left/Right: previous / next",
@@ -596,10 +704,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skeleton", type=Path, default=default_skeleton, help="Skeleton TSV with body segments")
     parser.add_argument("--ball-3d", type=Path, default=default_ball_3d, help="6DOF marker TSV for the ball")
     parser.add_argument("--ball-6d", type=Path, default=default_ball_6d, help="6D TSV with the ground-truth ball center")
+    parser.add_argument("--body", type=Path, default=None, help="Raw body marker TSV (shows body markers instead of the skeleton)")
     parser.add_argument("--frame", type=int, default=None, help="Initial frame to show")
     parser.add_argument("--ball-mode", choices=("fit", "gt"), default="fit", help="Initial ball placement mode")
     parser.add_argument("--bones", dest="bones", action="store_true", default=True, help="Draw skeleton bones")
     parser.add_argument("--no-bones", dest="bones", action="store_false", help="Draw body segments as points instead of bones")
+    parser.add_argument("--raw-markers", dest="raw_markers", action="store_true", default=True, help="Show raw body markers instead of the skeleton")
+    parser.add_argument("--no-raw-markers", dest="raw_markers", action="store_false", help="Show the skeleton instead of raw body markers")
     return parser
 
 
@@ -609,14 +720,17 @@ def main() -> int:
     skeleton_index = index_skeleton_file(args.skeleton)
     ball_3d_index = index_ball_3d_file(args.ball_3d)
     ball_6d_index = index_ball_6d_file(args.ball_6d)
+    body_index = index_body_file(args.body) if args.body is not None else None
 
     viewer = FrameViewer(
         skeleton_index=skeleton_index,
         ball_3d_index=ball_3d_index,
         ball_6d_index=ball_6d_index,
+        body_index=body_index,
         use_bones=args.bones,
         ball_mode=args.ball_mode,
         start_frame=args.frame,
+        show_raw_markers=args.body is not None,
     )
 
     print(f"Loaded {len(viewer.shared_frames)} shared frames")

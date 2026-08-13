@@ -27,6 +27,13 @@ from tsv_frame_viewer import (  # type: ignore
     parse_skeleton_row_cached,
 )
 
+# Reuse the X/Y swap utility from the tools directory.
+TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.append(str(TOOLS_DIR))
+
+from swap_xy_tsv import swap_xy_file  # type: ignore
+
 from ball_trajectory import BallPoint
 from release_detector_trajectory_based import compute_velocity_acceleration_from_points, select_release_index
 
@@ -391,6 +398,59 @@ def _detect_pre_impact_frame(
     return valid_samples[-1].frame
 
 
+def _detect_free_flight_window(
+    ball_by_frame: Dict[int, BallSample],
+    all_frames: Sequence[int],
+    por_frame: Optional[int],
+    samples: Sequence[BallSample],
+    kinematics: Kinematics,
+) -> Tuple[Optional[int], Optional[int]]:
+    """Detect the free flight window [start, end].
+
+    start = PoR of method 1.
+    end = first frame after start where either the ball has hit the wall
+    (X velocity reverses) or the ball has a missing/invalid point.
+    """
+    if por_frame is None:
+        return None, None
+
+    frame_to_idx = {sample.frame: idx for idx, sample in enumerate(samples)}
+
+    por_idx = frame_to_idx.get(por_frame)
+    if por_idx is None:
+        return por_frame, por_frame
+
+    # Initial X velocity direction at PoR.
+    initial_vx: Optional[float] = None
+    for idx in range(por_idx, len(samples)):
+        vel = kinematics.velocity_vec_mm_s[idx]
+        if vel is not None:
+            initial_vx = float(vel[0])
+            break
+    if initial_vx is None or abs(initial_vx) < 1e-6:
+        return por_frame, por_frame
+
+    end_frame = por_frame
+    for frame in all_frames:
+        if frame <= por_frame:
+            continue
+        sample = ball_by_frame.get(frame)
+        if sample is None or not sample.valid:
+            end_frame = frame
+            break
+        sample_idx = frame_to_idx.get(frame)
+        if sample_idx is not None:
+            vel = kinematics.velocity_vec_mm_s[sample_idx]
+            if vel is not None and initial_vx * float(vel[0]) < 0.0:
+                end_frame = frame
+                break
+        end_frame = frame
+
+    end_frame -= 5
+
+    return por_frame, end_frame
+
+
 def _collect_window_samples(
     ball_by_frame: Dict[int, BallSample],
     all_frames: Sequence[int],
@@ -732,6 +792,8 @@ def run_pipeline(
             method2 = MethodResult(None, None, None, None, None)
             method3 = MethodResult(None, None, None, None, None)
             valid_count = 0
+            free_flight_start = None
+            free_flight_end = None
         else:
             pre_impact_frame = _detect_pre_impact_frame(
                 valid_window_samples,
@@ -744,6 +806,14 @@ def run_pipeline(
             # uses kinematics from the full valid segment window.
             full_kinematics = _compute_kinematics(valid_window_samples, fs_hz=FS_HZ)
             method1 = _method_result_at_frame(full_kinematics, segment.method1_por_frame)
+
+            free_flight_start, free_flight_end = _detect_free_flight_window(
+                ball_by_frame=ball_by_frame,
+                all_frames=shared_frames,
+                por_frame=method1.por_frame,
+                samples=valid_window_samples,
+                kinematics=full_kinematics,
+            )
 
             # Methods 2 and 3 search only up to the pre-impact boundary.
             kinematics = _compute_kinematics(pre_impact_samples, fs_hz=FS_HZ)
@@ -818,6 +888,13 @@ def run_pipeline(
                 "method1_baseline_std_mm": segment.baseline_std_mm,
                 "method1_release_distance_mm": segment.distance_at_release_mm,
                 "pre_impact_y_threshold_mm": pre_impact_y_mm,
+                "free_flight_start": free_flight_start,
+                "free_flight_end": free_flight_end,
+                "free_flight_window": (
+                    f"{free_flight_start}-{free_flight_end}"
+                    if free_flight_start is not None and free_flight_end is not None
+                    else ""
+                ),
                 "ball_source": ball_source,
             }
         )
@@ -849,6 +926,9 @@ def run_pipeline(
         "method1_baseline_std_mm",
         "method1_release_distance_mm",
         "pre_impact_y_threshold_mm",
+        "free_flight_start",
+        "free_flight_end",
+        "free_flight_window",
         "ball_source",
     ]
     with output_csv.open("w", encoding="utf-8", newline="") as handle:
@@ -949,6 +1029,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=1750.0,
         help="Pre-impact boundary: first valid sample with Y > threshold (mm)",
     )
+    parser.add_argument(
+        "--swap-xy",
+        dest="swap_xy",
+        action="store_true",
+        default=True,
+        help="Swap X and Y coordinates in the input TSV files before processing",
+    )
+    parser.add_argument(
+        "--no-swap-xy",
+        dest="swap_xy",
+        action="store_false",
+        help="Do not swap X and Y coordinates in the input TSV files",
+    )
     return parser
 
 
@@ -958,10 +1051,23 @@ def main() -> int:
     # Generate output path with running count to avoid overwriting
     output_csv = _get_next_output_path(args.output_csv)
     
+    # Swap X and Y coordinates in the input files first (creates _XY_swapped files).
+    if args.swap_xy:
+        skeleton_path = swap_xy_file(args.skeleton)
+        ball_3d_path = swap_xy_file(args.ball_3d)
+        ball_6d_path = swap_xy_file(args.ball_6d)
+        print(f"Swapped skeleton -> {skeleton_path}")
+        print(f"Swapped ball 3D -> {ball_3d_path}")
+        print(f"Swapped ball 6D -> {ball_6d_path}")
+    else:
+        skeleton_path = args.skeleton
+        ball_3d_path = args.ball_3d
+        ball_6d_path = args.ball_6d
+    
     run_pipeline(
-        skeleton_path=args.skeleton,
-        ball_3d_path=args.ball_3d,
-        ball_6d_path=args.ball_6d,
+        skeleton_path=skeleton_path,
+        ball_3d_path=ball_3d_path,
+        ball_6d_path=ball_6d_path,
         ball_source=args.ball_source,
         output_csv=output_csv,
         reacquire_distance_mm=args.reacquire_distance_mm,

@@ -111,34 +111,48 @@ def _safe_int(value: Any) -> Optional[int]:
         return None
 
 
-def _por_x_position(row: Dict[str, Any], trajectory: List[Dict[str, Any]], x: List[float]) -> Optional[float]:
-    if not trajectory or not x:
+def _resolve_release_index(row: Dict[str, Any], trajectory: List[Dict[str, Any]]) -> Optional[int]:
+    """Find the trajectory_json index of the release/PoR point.
+
+    The `release_idx` column is sometimes computed against a differently
+    windowed points list than the `trajectory_json` stored in the CSV (this
+    happens for both simple_penalty_trajectories.csv and the
+    por_method_comparison_*_timeseries.csv variants), so it cannot be trusted
+    as a direct list index. Matching on the release timestamp against the
+    trajectory itself is reliable across both CSV formats; `release_idx` is
+    only used as a last-resort fallback when no timestamp match is found.
+    """
+    if not trajectory:
         return None
 
-    release_idx = _safe_int(row.get("release_idx"))
-    if release_idx is not None and 0 <= release_idx < len(x):
-        return x[release_idx]
+    def _find_by_time(t_iso: str) -> Optional[int]:
+        if not t_iso:
+            return None
+        for idx, point in enumerate(trajectory):
+            if str(point.get("t_local", "")).strip() == t_iso:
+                return idx
+        return None
 
     release_time = str(row.get("release_time_local", "")).strip()
     if release_time:
-        release_time_iso = release_time.replace(" ", "T")
-        for idx, point in enumerate(trajectory):
-            t_local = str(point.get("t_local", "")).strip()
-            if t_local == release_time_iso and idx < len(x):
-                return x[idx]
+        idx = _find_by_time(release_time.replace(" ", "T"))
+        if idx is not None:
+            return idx
 
     release_point_raw = row.get("release_point_json")
     if release_point_raw:
         try:
             release_point = json.loads(str(release_point_raw))
-            release_point_t = str(release_point.get("t_local", "")).strip()
-            if release_point_t:
-                for idx, point in enumerate(trajectory):
-                    t_local = str(point.get("t_local", "")).strip()
-                    if t_local == release_point_t and idx < len(x):
-                        return x[idx]
+            idx = _find_by_time(str(release_point.get("t_local", "")).strip())
+            if idx is not None:
+                return idx
         except Exception:
             pass
+
+    release_idx = _safe_int(row.get("release_idx"))
+    if release_idx is not None and 0 <= release_idx < len(trajectory):
+        return release_idx
+
     return None
 
 
@@ -228,9 +242,9 @@ def plot_row(
     recomputed_a_full = [_to_optional_float(a) for a in _parse_json_list(accel_source)]
 
     # Window data around PoR if requested
-    release_idx = _safe_int(row.get("release_idx"))
+    release_idx = _resolve_release_index(row, trajectory)
     start_idx = 0
-    if por_window_frames is not None and release_idx is not None and release_idx >= 0 and release_idx < len(trajectory):
+    if por_window_frames is not None and release_idx is not None and 0 <= release_idx < len(trajectory):
         start_idx = max(0, release_idx - por_window_frames)
         end_idx = min(len(trajectory), release_idx + por_window_frames + 1)
         trajectory = trajectory[start_idx:end_idx]
@@ -259,7 +273,7 @@ def plot_row(
     title_base = f"id={shot_id} | {matchup}" if matchup else f"id={shot_id}"
 
     # Adjust PoR x-position if windowing was applied
-    if release_idx >= 0 and release_idx < len(x):
+    if release_idx is not None and 0 <= release_idx < len(x):
         por_x = x[release_idx]
     else:
         por_x = None

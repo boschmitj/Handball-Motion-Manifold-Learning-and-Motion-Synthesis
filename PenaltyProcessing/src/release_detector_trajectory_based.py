@@ -337,6 +337,73 @@ def _has_strong_direction_change(points: Sequence[BallPoint], idx: int, candidat
     return False
 
 
+def _rotate_180_z(points: Sequence[BallPoint]) -> List[BallPoint]:
+    """Rotate points by 180 degrees around the Z axis.
+
+    Applies ``newX = -oldX``, ``newY = -oldY``, ``newZ = oldZ`` to every point.
+    This maps a throw performed on the left side of the field (-x) onto the
+    right side (+x) while preserving right-handedness.
+    """
+    rotated: List[BallPoint] = []
+    for point in points:
+        rotated.append(
+            BallPoint(
+                local_dt=point.local_dt,
+                ts_ms=point.ts_ms,
+                x=-point.x,
+                y=-point.y,
+                z=point.z,
+                speed=point.speed,
+                accel=point.accel,
+                direction=point.direction,
+            )
+        )
+    return rotated
+
+
+def _is_left_side(points: Sequence[BallPoint]) -> bool:
+    """Return True if the throw is performed on the left side of the field (-x).
+
+    Determines the side from the median x-coordinate of the points near the
+    release area (|x| < 14 m, i.e. before the goal line).
+    """
+    near_points = [p.x for p in points if abs(p.x) > 12.0]
+    if not near_points:
+        return False
+    median_x = float(np.median(near_points))
+    return median_x < 0.0
+
+
+def _has_deflection(points: Sequence[BallPoint], start_idx: int, end_idx: int) -> bool:
+    """Detect whether the trajectory contains a deflection (e.g. by the goalkeeper).
+
+    Uses the same strong-direction-change heuristic as the release detector:
+    a deflection is present if any point after the release area shows a strong
+    direction change or deviates from the fitted reference line.
+    """
+    if len(points) < 5:
+        return False
+
+    # Find a candidate release index near the 13 m gate.
+    release_idx = select_release_index(points, start_idx, end_idx)
+    if release_idx is None:
+        return False
+
+    # Fit a reference line from the post-release points and scan for strong
+    # direction changes or reference-line deviations. Ground hits and goal-line
+    # crossings are NOT deflections.
+    reference_line = _fit_reference_line(points[release_idx + 1 : end_idx + 1])
+    for idx in range(release_idx + 2, end_idx + 1):
+        if abs(points[idx].x) > 20.0:
+            break
+        if _is_ground_contact(points, idx):
+            break
+        if _has_strong_direction_change(points, idx, release_idx, reference_line=reference_line):
+            return True
+
+    return False
+
+
 def _build_valid_post_segment(points: Sequence[BallPoint], candidate_idx: int, end_idx: int) -> Optional[Tuple[int, int]]:
     if candidate_idx >= end_idx:
         return None
@@ -347,7 +414,8 @@ def _build_valid_post_segment(points: Sequence[BallPoint], candidate_idx: int, e
         if abs(points[idx].x) > 20.0:
             segment_end = idx - 1
             break
-        if points[idx].z <= 0.18 and points[idx - 1].z <= 0.18:
+        # TODO: I doubt this works, because points are scarse, 2 points do not necessarily are both below 0.18
+        if _is_ground_contact(points, idx):
             segment_end = idx - 1
             break
         if _has_strong_direction_change(points, idx, candidate_idx, reference_line=reference_line):
@@ -356,6 +424,27 @@ def _build_valid_post_segment(points: Sequence[BallPoint], candidate_idx: int, e
     if segment_end < candidate_idx + 4:
         return None
     return candidate_idx, segment_end
+
+def _is_ground_contact(
+    points: Sequence[BallPoint],
+    idx: int,
+    ground_z: float = 0.0,
+    tolerance: float = 0.2,
+    window: int = 3,
+) -> bool:
+    if idx + window >= len(points):
+        return False
+
+    window_points = points[idx : idx + window + 1]
+    zs = [p.z for p in window_points]
+
+    # Ball is close to the ground.
+    near_ground = min(zs) <= ground_z + tolerance
+
+    # It is approaching the ground rather than moving away from it.
+    descending = zs[0] > zs[-1]
+
+    return near_ground and descending
 
 
 def _projectile_fit_score(points: Sequence[BallPoint], candidate_idx: int, start_idx: int, end_idx: int) -> Tuple[float, Dict[str, Any]]:
@@ -509,7 +598,15 @@ def compute_velocity_acceleration_from_points(points: Sequence[BallPoint]) -> Tu
     return speeds, accels
 
 
-def detect_simple_release_point(penalty_row: Dict[str, str], positions_dir: Path, fixture_cache: Optional[FixtureCache] = None, fixture_path: Optional[Path] = None, points: Optional[List[BallPoint]] = None) -> Dict[str, Any]:
+def detect_simple_release_point(
+    penalty_row: Dict[str, str],
+    positions_dir: Path,
+    fixture_cache: Optional[FixtureCache] = None,
+    fixture_path: Optional[Path] = None,
+    points: Optional[List[BallPoint]] = None,
+    normalize_side: bool = False,
+    include_deflections: bool = True,
+) -> Dict[str, Any]:
     player_id = _coerce_text(penalty_row.get("player_id"))
     goalkeeper_id = _coerce_text(penalty_row.get("goalkeeper_id"))
 
@@ -540,11 +637,22 @@ def detect_simple_release_point(penalty_row: Dict[str, str], positions_dir: Path
     if not points:
         raise ValueError(f"No ball points found for penalty {penalty_row.get('id', 'unknown')}")
 
+    # Optionally transform throws performed on the left side of the field (-x)
+    # onto the right side (+x) via a 180-degree rotation around the Z axis.
+    was_left_side = False
+    if normalize_side and _is_left_side(points):
+        points = _rotate_180_z(points)
+        was_left_side = True
+
     # Use the reported start time as the anchor and extend the window until the
     # ball clears the goal line, then include a few extra points for context.
     start_idx, end_idx = _find_window(points, start_dt)
     if start_idx >= end_idx:
         start_idx = max(0, end_idx - 2)
+
+    # Optionally skip penalties with a deflection (e.g. by the goalkeeper).
+    if not include_deflections and _has_deflection(points, start_idx, end_idx):
+        raise ValueError(f"Penalty {penalty_row.get('id', 'unknown')} has a deflection and is excluded")
 
     release_idx = select_release_index(points, start_idx, end_idx)
     if release_idx is None:
@@ -603,10 +711,20 @@ def detect_simple_release_point(penalty_row: Dict[str, str], positions_dir: Path
         "start_idx": start_idx,
         "end_idx": end_idx,
         "trajectory_points": len(points[start_idx:end_idx + 1]),
+        "normalized_side": was_left_side,
     }
 
 
-def process_penalties_csv(penalties_csv: Path, positions_dir: Path, output_csv: Path, errors_csv: Optional[Path] = None, include_unsuccessful: bool = False, penalty_id: Optional[str] = None) -> Path:
+def process_penalties_csv(
+    penalties_csv: Path,
+    positions_dir: Path,
+    output_csv: Path,
+    errors_csv: Optional[Path] = None,
+    include_unsuccessful: bool = False,
+    penalty_id: Optional[str] = None,
+    normalize_side: bool = False,
+    include_deflections: bool = True,
+) -> Path:
     with penalties_csv.open("r", encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle, delimiter=";"))
 
@@ -649,7 +767,14 @@ def process_penalties_csv(penalties_csv: Path, positions_dir: Path, output_csv: 
                 # start_dt). Reusing a single fixture-level window caused the
                 # same (first penalty's) points to be applied to every later
                 # penalty in the same fixture.
-                result = detect_simple_release_point(penalty_row=row, positions_dir=positions_dir, fixture_cache=fixture_cache, fixture_path=fixture_path)
+                result = detect_simple_release_point(
+                    penalty_row=row,
+                    positions_dir=positions_dir,
+                    fixture_cache=fixture_cache,
+                    fixture_path=fixture_path,
+                    normalize_side=normalize_side,
+                    include_deflections=include_deflections,
+                )
                 if result.get("release_idx") is not None:
                     logger.info(
                         "Row %d (id=%s): release detected at idx=%s time=%s",
@@ -695,6 +820,7 @@ def process_penalties_csv(penalties_csv: Path, positions_dir: Path, output_csv: 
             "trajectory_point_count": result.get("trajectory_points", 0),
             "release_idx": result.get("release_idx"),
             "release_idx_global": result.get("release_idx_global"),
+            "normalized_side": result.get("normalized_side", False),
             "error": result.get("error", ""),
         }
         records.append(record)
@@ -723,6 +849,7 @@ def process_penalties_csv(penalties_csv: Path, positions_dir: Path, output_csv: 
         "trajectory_point_count",
         "release_idx",
         "release_idx_global",
+        "normalized_side",
         "error",
     ]
     with output_csv.open("w", encoding="utf-8", newline="") as handle:
@@ -783,6 +910,16 @@ def main() -> None:
     parser.add_argument("--output", default=str(project_root / "out" / "simple_penalty_trajectories.csv"))
     parser.add_argument("--include-unsuccessful", action="store_true")
     parser.add_argument("--penalty-id", default=None)
+    parser.add_argument(
+        "--normalize-side",
+        action="store_true",
+        help="Transform throws on the left side of the field (-x) onto the right side (+x) via a 180-degree Z rotation",
+    )
+    parser.add_argument(
+        "--exclude-deflections",
+        action="store_true",
+        help="Exclude penalties with a deflection (e.g. by the goalkeeper)",
+    )
     args = parser.parse_args()
 
     # Configure logging so the user sees which fixture is currently being
@@ -801,7 +938,16 @@ def main() -> None:
     output_csv = run_dir / Path(args.output).name
     errors_csv = run_dir / "simple_penalty_errors.csv"
 
-    process_penalties_csv(Path(args.penalties), Path(args.positions_dir), output_csv, errors_csv=errors_csv, include_unsuccessful=args.include_unsuccessful, penalty_id=args.penalty_id)
+    process_penalties_csv(
+        Path(args.penalties),
+        Path(args.positions_dir),
+        output_csv,
+        errors_csv=errors_csv,
+        include_unsuccessful=args.include_unsuccessful,
+        penalty_id=args.penalty_id,
+        normalize_side=args.normalize_side,
+        include_deflections=not args.exclude_deflections,
+    )
 
 
 if __name__ == "__main__":
