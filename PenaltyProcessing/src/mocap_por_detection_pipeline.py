@@ -338,14 +338,14 @@ def _detect_method2_por_frame(kinematics: Kinematics) -> Optional[int]:
     if zero_crossing_candidates:
         best = max(
             zero_crossing_candidates,
-            key=lambda idx: (kinematics.speed_mm_s[idx] if kinematics.speed_mm_s[idx] is not None else -1e12),
-        )
+            key=lambda idx: (kinematics.speed_mm_s[idx] if kinematics.speed_mm_s[idx] is not None else -1e12), # type: ignore
+        ) # type: ignore
         return kinematics.frames[best]
 
     best = max(
         valid_speed_indices,
-        key=lambda idx: (kinematics.speed_mm_s[idx] if kinematics.speed_mm_s[idx] is not None else -1e12),
-    )
+        key=lambda idx: (kinematics.speed_mm_s[idx] if kinematics.speed_mm_s[idx] is not None else -1e12), # type: ignore
+    ) # type: ignore
     return kinematics.frames[best]
 
 

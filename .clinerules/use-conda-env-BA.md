@@ -1,0 +1,1 @@
+Use conda activate BA before you run any python code. Do not install dependencies into other environments and do not create other environments unless told otherwise.

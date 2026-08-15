@@ -100,6 +100,9 @@ def parse_position_local_time(value: str) -> Optional[datetime]:
     ``01/15/2025, 2:30:00.123 PM`` or European-style
     ``15.01.2025, 14:30:00.123``. This tries each known format in order.
 
+    Also handles ISO-8601 timestamps (e.g. ``2023-08-24T19:03:18.150``) which
+    appear in the ``t_local`` field of serialized trajectory JSON.
+
     Args:
         value: Raw timestamp string (may be empty or wrapped in quotes).
 
@@ -114,6 +117,8 @@ def parse_position_local_time(value: str) -> Optional[datetime]:
         "%m/%d/%Y, %I:%M:%S %p",
         "%d.%m.%Y, %H:%M:%S.%f",
         "%d.%m.%Y, %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S.%f",
+        "%Y-%m-%dT%H:%M:%S",
     ):
         try:
             return datetime.strptime(value, fmt)

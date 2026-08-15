@@ -28,3 +28,40 @@ PenaltyProcessing/out/
 PenaltyProcessing/games_position_files
 PenaltyProcessing/penalties.csv
 PenaltyProcessing/mocap_por/
+
+# LaTeX auxiliary files
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+*.lof
+*.lot
+
+# Bibliography/index/glossary intermediates
+*.idx
+*.ilg
+*.ind
+*.ist
+*.acn
+*.acr
+*.alg
+*.glg
+*.glo
+*.gls
+*.glsdefs
+
+# Beamer / navigation files
+*.nav
+*.snm
+*.vrb
+
+# Temporary files
+*.tmp
+/writing

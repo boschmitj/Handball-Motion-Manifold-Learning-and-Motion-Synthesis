@@ -696,9 +696,9 @@ class FrameViewer:
 
 def build_parser() -> argparse.ArgumentParser:
     default_root = Path(__file__).resolve().parent.parent
-    default_skeleton = default_root / "mocap_files" / "skeleton" / "Mo_Wurfvariation4_ul0251_reprocessing_labeling_done_s_Josh.tsv"
-    default_ball_3d = default_root / "mocap_files" / "6DOF" / "Mo_Wurfvariation4_ul0251_reprocessing_6DOF_3D.tsv"
-    default_ball_6d = default_root / "mocap_files" / "6DOF" / "Mo_Wurfvariation4_ul0251_reprocessing_labeling_done_6D.tsv"
+    default_skeleton = default_root / "mocap_files" / "throw_ul" / "skeleton" / "Mo_Wurfvariation4_ul0251_reprocessing_labeling_done_s_Josh.tsv"
+    default_ball_3d = default_root / "mocap_files" / "throw_ul" / "6DOF" / "Mo_Wurfvariation4_ul0251_reprocessing_6DOF_3D.tsv"
+    default_ball_6d = default_root / "mocap_files" / "throw_ul" / "6DOF" / "Mo_Wurfvariation4_ul0251_reprocessing_labeling_done_6D.tsv"
 
     parser = argparse.ArgumentParser(description="Interactive frame-by-frame TSV viewer for body and ball mocap data.")
     parser.add_argument("--skeleton", type=Path, default=default_skeleton, help="Skeleton TSV with body segments")

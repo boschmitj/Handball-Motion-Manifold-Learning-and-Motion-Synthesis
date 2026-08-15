@@ -341,6 +341,9 @@ def _rotate_180_z(points: Sequence[BallPoint]) -> List[BallPoint]:
     """Rotate points by 180 degrees around the Z axis.
 
     Applies ``newX = -oldX``, ``newY = -oldY``, ``newZ = oldZ`` to every point.
+    Also rotates the ``direction`` heading by 180° so the direction stays
+    consistent with the rotated coordinate frame (e.g. a throw toward -x
+    becomes a throw toward +x, so 180° becomes 0°).
     This maps a throw performed on the left side of the field (-x) onto the
     right side (+x) while preserving right-handedness.
     """
@@ -355,7 +358,7 @@ def _rotate_180_z(points: Sequence[BallPoint]) -> List[BallPoint]:
                 z=point.z,
                 speed=point.speed,
                 accel=point.accel,
-                direction=point.direction,
+                direction=(point.direction + 180.0) % 360.0 if point.direction is not None else None,
             )
         )
     return rotated
@@ -914,6 +917,7 @@ def main() -> None:
         "--normalize-side",
         action="store_true",
         help="Transform throws on the left side of the field (-x) onto the right side (+x) via a 180-degree Z rotation",
+        default=True
     )
     parser.add_argument(
         "--exclude-deflections",
