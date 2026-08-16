@@ -81,6 +81,11 @@
 10. **Top-k output.**
     Serialize the top-k League throw IDs + distances to CSV/JSON for each Mocap throw.
 
+-> Found throws are looking plausible
+-> Need to be upsampled for animation and smoothed
+-> For throws with z down then z up, need to find a plausible bounce location
+
+
 ### Phase 3 — Trajectory alignment for continuation
 
 11. **Implement `L_aligned(t) = L(t) − L(0) + M(0)`** to translate the selected

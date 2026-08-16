@@ -26,14 +26,22 @@ from penalty_time_utils import canonical_team_name, parse_penalty_local_time, pa
 
 
 @dataclass
-class ReleaseCandidate:
-    idx: int
-    score: float
-    x: float
-    z: float
-    speed: float
-    accel: float
-    direction: Optional[float]
+class ProjectileModel:
+    """Timestamp-based polynomial model of the free-flight ball trajectory."""
+
+    origin_dt: datetime
+    x: np.ndarray
+    y: np.ndarray
+    z: np.ndarray
+
+    def position_at(self, dt: datetime) -> Tuple[float, float, float]:
+        t = (dt - self.origin_dt).total_seconds()
+        return tuple(float(np.polynomial.polynomial.polyval(t, c)) for c in (self.x, self.y, self.z))  # type: ignore[return-value]
+
+    def velocity_at(self, dt: datetime) -> Tuple[float, float, float]:
+        t = (dt - self.origin_dt).total_seconds()
+        values = [float(np.polynomial.polynomial.polyval(t, np.polynomial.polynomial.polyder(c))) for c in (self.x, self.y, self.z)]
+        return values[0], values[1], values[2]
 
 
 class FixtureCache:
@@ -218,70 +226,6 @@ def _find_window(points: Sequence[BallPoint], start_dt: datetime) -> Tuple[int, 
     return start_idx, end_idx
 
 
-def _estimate_motion_energy(points: Sequence[BallPoint], start_idx: int, end_idx: int) -> Tuple[float, float]:
-    if start_idx >= end_idx:
-        return 0.0, 0.0
-    xs = [p.x for p in points[start_idx : end_idx + 1]]
-    zs = [p.z for p in points[start_idx : end_idx + 1]]
-    dx = xs[-1] - xs[0]
-    dz = zs[-1] - zs[0]
-    return abs(dx), abs(dz)
-
-
-def _solve_linear_system(matrix: Sequence[Sequence[float]], vector: Sequence[float]) -> Optional[List[float]]:
-    size = len(matrix)
-    aug = [list(row) + [vector[i]] for i, row in enumerate(matrix)]
-    for pivot in range(size):
-        pivot_row = max(range(pivot, size), key=lambda r: abs(aug[r][pivot]))
-        if abs(aug[pivot_row][pivot]) < 1e-9:
-            return None
-        aug[pivot], aug[pivot_row] = aug[pivot_row], aug[pivot]
-        for row in range(pivot + 1, size):
-            factor = aug[row][pivot] / aug[pivot][pivot]
-            for col in range(pivot, size + 1):
-                aug[row][col] -= factor * aug[pivot][col]
-    solution = [0.0] * size
-    for row in range(size - 1, -1, -1):
-        total = aug[row][size]
-        for col in range(row + 1, size):
-            total -= aug[row][col] * solution[col]
-        if abs(aug[row][row]) < 1e-9:
-            return None
-        solution[row] = total / aug[row][row]
-    return solution
-
-
-def _fit_poly(values: Sequence[float], degree: int) -> Tuple[Optional[List[float]], Optional[float]]:
-    values_list = [float(v) for v in values]
-    n = len(values_list)
-    if n < degree + 1:
-        return None, None
-    t = [i / 20.0 for i in range(n)]
-    if degree == 1:
-        design = [[1.0, t_i] for t_i in t]
-    elif degree == 2:
-        design = [[1.0, t_i, t_i * t_i] for t_i in t]
-    else:
-        return None, None
-    rhs = values_list
-    coeffs = _solve_linear_system(
-        [[sum(design[i][j] * design[i][k] for i in range(n)) for k in range(degree + 1)] for j in range(degree + 1)],
-        [sum(design[i][j] * rhs[i] for i in range(n)) for j in range(degree + 1)],
-    )
-    if coeffs is None:
-        return None, None
-    preds = [sum(coeffs[j] * design[i][j] for j in range(degree + 1)) for i in range(n)]
-    rmse = math.sqrt(sum((values_list[i] - preds[i]) ** 2 for i in range(n)) / max(n, 1))
-    return coeffs, rmse
-
-
-def _normalize_rmse(rmse: float, values: Sequence[float]) -> float:
-    if not values:
-        return 1.0
-    span = max(abs(max(values, default=0.0)), abs(min(values, default=0.0)), 1.0)
-    return rmse / max(span, 1e-3)
-
-
 def _fit_reference_line(points: Sequence[BallPoint]) -> Optional[Tuple[float, float, float]]:
     reference_points = [p for p in points if 14.0 < abs(p.x) < 16.0]
     if len(reference_points) < 3:
@@ -307,24 +251,30 @@ def _fit_reference_line(points: Sequence[BallPoint]) -> Optional[Tuple[float, fl
     return slope, intercept, tolerance
 
 
-def _has_strong_direction_change(points: Sequence[BallPoint], idx: int, candidate_idx: int, reference_line: Optional[Tuple[float, float, float]] = None) -> bool:
-    if idx <= candidate_idx + 1:
+def _has_strong_direction_change(
+    points: Sequence[BallPoint],
+    idx: int,
+    reference_line: Optional[Tuple[float, float, float]] = None,
+) -> bool:
+    if idx < 2 or not 16.0 < abs(points[idx].x) < 20.0:
         return False
 
     point = points[idx]
-    if abs(point.x) >= 16.0:
-        return False
-
     prev_prev = points[idx - 2]
     prev = points[idx - 1]
     curr = points[idx]
 
-    prev_vel = prev.x - prev_prev.x
-    curr_vel = curr.x - prev.x
-    if prev_vel * curr_vel < 0.0 and abs(prev_vel) > 0.35 and abs(curr_vel) > 0.35:
+    prev_dt = (prev.local_dt - prev_prev.local_dt).total_seconds()
+    curr_dt = (curr.local_dt - prev.local_dt).total_seconds()
+    if prev_dt <= 0.0 or curr_dt <= 0.0:
+        return False
+    prev_vel = (prev.x - prev_prev.x) / prev_dt
+    curr_vel = (curr.x - prev.x) / curr_dt
+    if prev_vel * curr_vel < 0.0 and abs(prev_vel) > 3.0 and abs(curr_vel) > 3.0:
         if idx + 1 < len(points):
-            next_vel = points[idx + 1].x - curr.x
-            if abs(next_vel) > 0.35 and next_vel * curr_vel > 0.0:
+            next_dt = (points[idx + 1].local_dt - curr.local_dt).total_seconds()
+            next_vel = (points[idx + 1].x - curr.x) / next_dt if next_dt > 0.0 else 0.0
+            if abs(next_vel) > 3.0 and next_vel * curr_vel > 0.0:
                 return True
         return True
 
@@ -387,161 +337,331 @@ def _has_deflection(points: Sequence[BallPoint], start_idx: int, end_idx: int) -
     if len(points) < 5:
         return False
 
-    # Find a candidate release index near the 13 m gate.
-    release_idx = select_release_index(points, start_idx, end_idx)
-    if release_idx is None:
-        return False
-
-    # Fit a reference line from the post-release points and scan for strong
-    # direction changes or reference-line deviations. Ground hits and goal-line
-    # crossings are NOT deflections.
-    reference_line = _fit_reference_line(points[release_idx + 1 : end_idx + 1])
-    for idx in range(release_idx + 2, end_idx + 1):
-        if abs(points[idx].x) > 20.0:
-            break
-        if _is_ground_contact(points, idx):
-            break
-        if _has_strong_direction_change(points, idx, release_idx, reference_line=reference_line):
+    # Fit the undisturbed approach line before the goalkeeper-contact zone.
+    # Only samples in 16 < |x| < 20 can be classified as keeper deflections.
+    reference_line = _fit_reference_line(points[start_idx:end_idx + 1])
+    bounce_idx = find_bounce_idx(points, start_idx, end_idx)
+    scan_end = min(end_idx, bounce_idx - 1) if bounce_idx is not None else end_idx
+    for idx in range(max(start_idx, 2), scan_end + 1):
+        if not 16.0 < abs(points[idx].x) < 20.0:
+            continue
+        if _has_strong_direction_change(points, idx, reference_line=reference_line):
             return True
-
+        if idx >= 3:
+            a, b, c = points[idx - 2], points[idx - 1], points[idx]
+            dt1 = (b.local_dt - a.local_dt).total_seconds()
+            dt2 = (c.local_dt - b.local_dt).total_seconds()
+            if dt1 > 0.0 and dt2 > 0.0:
+                v1 = np.array([(b.x-a.x)/dt1, (b.y-a.y)/dt1, (b.z-a.z)/dt1])
+                v2 = np.array([(c.x-b.x)/dt2, (c.y-b.y)/dt2, (c.z-b.z)/dt2])
+                n1, n2 = float(np.linalg.norm(v1)), float(np.linalg.norm(v2))
+                if n1 > 2.0 and n2 > 2.0:
+                    angle = math.degrees(math.acos(float(np.clip(np.dot(v1, v2) / (n1*n2), -1.0, 1.0))))
+                    if angle > 28.0 and min(a.z, b.z, c.z) > 0.25:
+                        return True
     return False
 
 
-def _build_valid_post_segment(points: Sequence[BallPoint], candidate_idx: int, end_idx: int) -> Optional[Tuple[int, int]]:
-    if candidate_idx >= end_idx:
+def find_bounce_idx(points: Sequence[BallPoint], start_idx: int, end_idx: int) -> Optional[int]:
+    """Return the last ground-contact sample in the 14 < |x| < 20 zone."""
+    if len(points) < 3:
         return None
-
-    reference_line = _fit_reference_line(points[candidate_idx + 1 : end_idx + 1])
-    segment_end = end_idx
-    for idx in range(candidate_idx + 1, end_idx + 1):
-        if abs(points[idx].x) > 20.0:
-            segment_end = idx - 1
-            break
-        # TODO: I doubt this works, because points are scarse, 2 points do not necessarily are both below 0.18
-        if _is_ground_contact(points, idx):
-            segment_end = idx - 1
-            break
-        if _has_strong_direction_change(points, idx, candidate_idx, reference_line=reference_line):
-            segment_end = idx - 1
-            break
-    if segment_end < candidate_idx + 4:
-        return None
-    return candidate_idx, segment_end
-
-def _is_ground_contact(
-    points: Sequence[BallPoint],
-    idx: int,
-    ground_z: float = 0.0,
-    tolerance: float = 0.2,
-    window: int = 3,
-) -> bool:
-    if idx + window >= len(points):
-        return False
-
-    window_points = points[idx : idx + window + 1]
-    zs = [p.z for p in window_points]
-
-    # Ball is close to the ground.
-    near_ground = min(zs) <= ground_z + tolerance
-
-    # It is approaching the ground rather than moving away from it.
-    descending = zs[0] > zs[-1]
-
-    return near_ground and descending
-
-
-def _projectile_fit_score(points: Sequence[BallPoint], candidate_idx: int, start_idx: int, end_idx: int) -> Tuple[float, Dict[str, Any]]:
-    segment = _build_valid_post_segment(points, candidate_idx, end_idx)
-    if segment is None:
-        return -1e9, {"postfit": 0.0, "forward": 0.0, "gravity": 0.0, "segment_length": 0}
-
-    candidate_idx, segment_end = segment
-    post_points = points[candidate_idx : segment_end + 1]
-    if len(post_points) < 5:
-        return -1e9, {"postfit": 0.0, "forward": 0.0, "gravity": 0.0, "segment_length": len(post_points)}
-
-    release_point = points[candidate_idx]
-    goal_sign = 1.0 if (post_points[-1].x - release_point.x) >= 0.0 else -1.0
-    post_long = [(p.x - release_point.x) * goal_sign for p in post_points]
-    post_lat = [p.y - release_point.y for p in post_points]
-    post_vert = [p.z - release_point.z for p in post_points]
-
-    fit_values: List[float] = []
-    for values, degree in ((post_long, 1), (post_lat, 1), (post_vert, 2)):
-        _, rmse = _fit_poly(values, degree)
-        if rmse is None:
+    lo, hi = max(1, start_idx), min(end_idx, len(points) - 2)
+    for idx in range(hi, lo - 1, -1):
+        p0, p1, p2 = points[idx - 1], points[idx], points[idx + 1]
+        if not (14.0 < abs(p1.x) < 20.0) or p1.z > 0.30:
             continue
-        fit_values.append(_normalize_rmse(rmse, values))
+        dt0 = (p1.local_dt - p0.local_dt).total_seconds()
+        dt1 = (p2.local_dt - p1.local_dt).total_seconds()
+        if dt0 <= 0.0 or dt1 <= 0.0:
+            continue
+        vz_before = (p1.z - p0.z) / dt0
+        vz_after = (p2.z - p1.z) / dt1
+        if p1.z <= p0.z and p1.z <= p2.z and vz_before < -0.5 and vz_after > 0.5:
+            return idx
+    return None
 
-    if not fit_values:
-        return -1e9, {"postfit": 0.0, "forward": 0.0, "gravity": 0.0, "segment_length": len(post_points)}
 
-    postfit = float(sum(fit_values) / len(fit_values))
-    postfit_component = max(0.0, 1.0 - postfit)
+def _fit_projectile_model(points: Sequence[BallPoint]) -> Optional[ProjectileModel]:
+    if len(points) < 3:
+        return None
+    origin = points[0].local_dt
+    times = np.asarray([(p.local_dt - origin).total_seconds() for p in points], dtype=float)
+    if len(np.unique(times)) < 3 or times[-1] <= 0.0:
+        return None
+    try:
+        x = np.polynomial.polynomial.polyfit(times, [p.x for p in points], 1)
+        y = np.polynomial.polynomial.polyfit(times, [p.y for p in points], 1)
+        z = np.polynomial.polynomial.polyfit(times, [p.z for p in points], 2)
+    except (ValueError, np.linalg.LinAlgError):
+        return None
+    if not all(np.all(np.isfinite(c)) for c in (x, y, z)):
+        return None
+    return ProjectileModel(origin, x, y, z)
 
-    forward = 0.0
-    if len(post_points) >= 2:
-        forward_gain = (post_points[-1].x - release_point.x) * goal_sign
-        forward = max(0.0, min(1.0, forward_gain / max(abs(forward_gain) + 1.0, 1.0)))
 
-    coeffs, _ = _fit_poly(post_vert, 2)
-    gravity_score = 0.0
-    if coeffs is not None:
-        accel_fit = 2.0 * coeffs[2]
-        gravity_score = max(0.0, 1.0 - min(1.0, abs(accel_fit - 9.81) / (2.0 * 9.81)))
+def _robust_scale(values: Sequence[float]) -> float:
+    array = np.asarray(values, dtype=float)
+    if not len(array):
+        return 0.0
+    median = float(np.median(array))
+    return 1.4826 * float(np.median(np.abs(array - median)))
 
-    segment_persistence = 1.0 if len(post_points) >= 7 else 0.55 + 0.075 * (len(post_points) - 5)
-    score = 0.7 * postfit_component + 0.2 * forward + 0.1 * gravity_score * segment_persistence
-    details = {
-        "postfit": float(postfit_component),
-        "forward": float(forward),
-        "gravity": float(gravity_score),
-        "segment_length": len(post_points),
-        "persistence": float(segment_persistence),
+
+def _anchor_tolerances(points: Sequence[BallPoint], model: ProjectileModel) -> Dict[str, float]:
+    residuals = []
+    direction = np.asarray((model.x[1], model.y[1]), dtype=float)
+    direction_norm = float(np.linalg.norm(direction))
+    for point in points:
+        predicted = model.position_at(point.local_dt)
+        xyz = np.asarray((point.x, point.y, point.z)) - np.asarray(predicted)
+        if direction_norm > 1e-9:
+            xy_line = abs(direction[0] * (point.y - model.y[0]) - direction[1] * (point.x - model.x[0])) / direction_norm
+        else:
+            xy_line = math.hypot(xyz[0], xyz[1])
+        residuals.append((abs(xyz[0]), abs(xyz[1]), abs(xyz[2]), xy_line))
+    columns = list(zip(*residuals))
+    minimums = (0.18, 0.15, 0.25, 0.15)
+    names = ("x", "y", "z", "xy_line")
+    return {name: max(minimum, 4.0 * _robust_scale(column)) for name, minimum, column in zip(names, minimums, columns)}
+
+
+def _nearby_interval_statistics(points: Sequence[BallPoint]) -> Tuple[Optional[float], Optional[float]]:
+    velocities: List[float] = []
+    displacements: List[float] = []
+    for first, second in zip(points[:3], points[1:4]):
+        dt = (second.local_dt - first.local_dt).total_seconds()
+        if dt <= 0.0:
+            continue
+        dx = abs(second.x - first.x)
+        displacements.append(dx)
+        velocities.append(dx / dt)
+    return (
+        float(np.median(velocities)) if velocities else None,
+        float(np.median(displacements)) if displacements else None,
+    )
+
+
+def _evaluate_projectile_candidate(
+    point: BallPoint,
+    next_point: BallPoint,
+    anchor_points: Sequence[BallPoint],
+    model: ProjectileModel,
+    tolerances: Dict[str, float],
+) -> Dict[str, Any]:
+    predicted = model.position_at(point.local_dt)
+    x_residual = abs(point.x - predicted[0])
+    y_residual = abs(point.y - predicted[1])
+    z_residual = abs(point.z - predicted[2])
+    direction = np.asarray((model.x[1], model.y[1]), dtype=float)
+    direction_norm = float(np.linalg.norm(direction))
+    xy_line_residual = (
+        abs(direction[0] * (point.y - model.y[0]) - direction[1] * (point.x - model.x[0])) / direction_norm
+        if direction_norm > 1e-9 else math.hypot(x_residual, y_residual)
+    )
+
+    dt = (next_point.local_dt - point.local_dt).total_seconds()
+    candidate_speed = abs(next_point.x - point.x) / dt if dt > 0.0 else None
+    clean_speed, clean_dx = _nearby_interval_statistics(anchor_points)
+    dx = abs(next_point.x - point.x)
+    dx_ratio = dx / clean_dx if clean_dx is not None and clean_dx > 1e-9 else None
+    velocity_ratio = candidate_speed / clean_speed if candidate_speed is not None and clean_speed and clean_speed > 1e-9 else None
+
+    normalized = {
+        "x": x_residual / tolerances["x"],
+        "y": y_residual / tolerances["y"],
+        "z": z_residual / tolerances["z"],
+        "xy_line": xy_line_residual / tolerances["xy_line"],
     }
-    return score, details
+    primary_geometry_ok = normalized["x"] <= 1.0 and normalized["y"] <= 1.0 and normalized["xy_line"] <= 1.0
+    vertical_ok = normalized["z"] <= 1.5
+    gross_motion_mismatch = (
+        (dx_ratio is not None and dx_ratio < 0.22)
+        or (velocity_ratio is not None and velocity_ratio < 0.25)
+        or dt <= 0.0
+    )
+    compatible = primary_geometry_ok and vertical_ok and not gross_motion_mismatch
+    worst_geometry = max(normalized.values())
+    extreme = worst_geometry > 3.0 or (gross_motion_mismatch and worst_geometry > 1.5)
+    return {
+        "compatible": compatible,
+        "extreme": extreme,
+        "x_residual": x_residual,
+        "y_residual": y_residual,
+        "z_residual": z_residual,
+        "xy_line_residual": xy_line_residual,
+        "dx_ratio": dx_ratio,
+        "velocity_ratio": velocity_ratio,
+        "normalized_error": float(np.mean(list(normalized.values()))),
+    }
 
 
-def _candidate_score(points: Sequence[BallPoint], idx: int, start_idx: int, end_idx: int) -> ReleaseCandidate:
-    if idx >= end_idx:
-        return ReleaseCandidate(idx=idx, score=-1e9, x=points[idx].x, z=points[idx].z, speed=points[idx].speed, accel=points[idx].accel, direction=points[idx].direction)
+def detect_backward_projectile_segment(points: Sequence[BallPoint], start_idx: int, end_idx: int) -> Optional[Dict[str, Any]]:
+    """Fit the clean trajectory tail and grow the projectile segment backward."""
+    if len(points) < 6:
+        return None
+    start_idx, end_idx = max(0, start_idx), min(end_idx, len(points) - 1)
+    projectile_end_idx = end_idx
+    for idx in range(start_idx, end_idx + 1):
+        if abs(points[idx].x) >= 20.0:
+            projectile_end_idx = max(start_idx, idx - 1)
+            break
+    under_14 = [i for i in range(start_idx, projectile_end_idx + 1) if abs(points[i].x) < 14.0]
+    search_start = under_14[-1] + 1 if under_14 else start_idx
+    bounce_idx = find_bounce_idx(points, search_start, projectile_end_idx)
+    if bounce_idx is not None:
+        projectile_end_idx = bounce_idx - 1
 
-    motion_score, details = _projectile_fit_score(points, idx, start_idx, end_idx)
-    score = motion_score
-    return ReleaseCandidate(idx=idx, score=score, x=points[idx].x, z=points[idx].z, speed=points[idx].speed, accel=points[idx].accel, direction=points[idx].direction)
+    # The post-gate samples are the clearly valid seed. Never cross back below
+    # 14 m merely to meet a sample-count or duration target: earlier samples
+    # are admitted only by the compatibility test below.
+    seed_start = search_start
+    if projectile_end_idx - seed_start + 1 < 3:
+        return None
+    anchor_points = points[seed_start:projectile_end_idx + 1]
+    anchor_point_count = len(anchor_points)
+    anchor_low_confidence = anchor_point_count == 3
+    accepted_start = seed_start
+    anchor_model = _fit_projectile_model(anchor_points)
+    if anchor_model is None:
+        return None
+    tolerances = _anchor_tolerances(anchor_points, anchor_model)
+    pending_failures: List[Tuple[int, Dict[str, Any]]] = []
+    compatible_after_failure = 0
+    boundary_diagnostics: Optional[Dict[str, Any]] = None
+    for idx in range(seed_start - 1, start_idx - 1, -1):
+        diagnostics = _evaluate_projectile_candidate(
+            points[idx], points[idx + 1], anchor_points, anchor_model, tolerances,
+        )
+        if diagnostics["compatible"]:
+            # Treat a single intervening failure as measurement noise. The
+            # fixed anchor remains unchanged, so it cannot contaminate later tests.
+            accepted_start = idx
+            if pending_failures:
+                compatible_after_failure += 1
+                if compatible_after_failure >= 2:
+                    pending_failures.clear()
+                    compatible_after_failure = 0
+            continue
+        pending_failures.append((idx, diagnostics))
+        if diagnostics["extreme"]:
+            boundary_diagnostics = pending_failures[0][1]
+            if len(pending_failures) > 1:
+                accepted_start = pending_failures[0][0] + 1
+            break
+        if len(pending_failures) >= 2:
+            # The first failure encountered is immediately adjacent to the
+            # accepted projectile region and therefore defines the boundary.
+            boundary_diagnostics = pending_failures[0][1]
+            accepted_start = pending_failures[0][0] + 1
+            break
+    else:
+        # An unconfirmed single failure is noise, not a transition.
+        if len(pending_failures) == 1:
+            accepted_start = pending_failures[0][0]
+    if accepted_start <= start_idx:
+        return None
+    final_model = _fit_projectile_model(points[accepted_start:projectile_end_idx + 1])
+    if final_model is None:
+        return None
+    if boundary_diagnostics is None:
+        boundary_diagnostics = _evaluate_projectile_candidate(
+            points[accepted_start - 1], points[accepted_start], anchor_points, anchor_model, tolerances,
+        )
+    release_abs_x = abs(points[accepted_start].x)
+    spatial_prior = 1.0 if release_abs_x >= 12.0 else max(0.45, 1.0 - 0.15 * (12.0 - release_abs_x))
+    separation = 1.0 - math.exp(-min(5.0, boundary_diagnostics["normalized_error"]))
+    confidence = separation * spatial_prior
+    if anchor_low_confidence:
+        confidence *= 0.75
+    return {
+        "last_non_projectile_idx": accepted_start - 1,
+        "first_projectile_idx": accepted_start,
+        "projectile_end_idx": projectile_end_idx,
+        "bounce_idx": bounce_idx,
+        "projectile_model": final_model,
+        "anchor_model": anchor_model,
+        "anchor_start_idx": seed_start,
+        "por_anchor_point_count": anchor_point_count,
+        "por_anchor_low_confidence": anchor_low_confidence,
+        "por_x_residual": boundary_diagnostics["x_residual"],
+        "por_y_residual": boundary_diagnostics["y_residual"],
+        "por_z_residual": boundary_diagnostics["z_residual"],
+        "por_xy_line_residual": boundary_diagnostics["xy_line_residual"],
+        "por_dx_ratio": boundary_diagnostics["dx_ratio"],
+        "por_boundary_normalized_error": boundary_diagnostics["normalized_error"],
+        "por_boundary_confidence": confidence,
+        "anchor_points": anchor_points,
+        "anchor_tolerances": tolerances,
+    }
+
+
+def _interpolated_release(p_before: BallPoint, p_after: BallPoint, alpha: float) -> Dict[str, Any]:
+    release_dt = p_before.local_dt + (p_after.local_dt - p_before.local_dt) * alpha
+    return {"alpha": float(alpha), "time": release_dt, "point": (
+        p_before.x + alpha * (p_after.x - p_before.x),
+        p_before.y + alpha * (p_after.y - p_before.y),
+        p_before.z + alpha * (p_after.z - p_before.z))}
+
+
+def estimate_release_midpoint(p_before: BallPoint, p_after: BallPoint) -> Dict[str, Any]:
+    return _interpolated_release(p_before, p_after, 0.5)
+
+
+def estimate_release_solved(
+    p_before: BallPoint,
+    p_after: BallPoint,
+    anchor_model: Optional[ProjectileModel],
+) -> Dict[str, Any]:
+    """Intersect the extended XY anchor with the boundary perpendicular bisector.
+
+    Release time and height retain the robust midpoint estimate. The horizontal
+    point lies on the clean anchor line and is equally distant from the last
+    hand-controlled and first projectile samples.
+    """
+    midpoint = _interpolated_release(p_before, p_after, 0.5)
+    if anchor_model is None:
+        midpoint.update({"error": None, "fallback": True, "solve_mode": "midpoint_fallback"})
+        return midpoint
+
+    a = np.asarray((p_before.x, p_before.y), dtype=float)
+    b = np.asarray((p_after.x, p_after.y), dtype=float)
+    line_origin = np.asarray((anchor_model.x[0], anchor_model.y[0]), dtype=float)
+    line_direction = np.asarray((anchor_model.x[1], anchor_model.y[1]), dtype=float)
+    boundary_delta = b - a
+    denominator = float(np.dot(line_direction, boundary_delta))
+    if abs(denominator) < 1e-9:
+        midpoint.update({"error": None, "fallback": True, "solve_mode": "midpoint_fallback"})
+        return midpoint
+
+    bisector_rhs = 0.5 * float(np.dot(b, b) - np.dot(a, a))
+    line_parameter = (bisector_rhs - float(np.dot(line_origin, boundary_delta))) / denominator
+    xy = line_origin + line_parameter * line_direction
+    if not np.all(np.isfinite(xy)):
+        midpoint.update({"error": None, "fallback": True, "solve_mode": "midpoint_fallback"})
+        return midpoint
+
+    point = (float(xy[0]), float(xy[1]), float(midpoint["point"][2]))
+    point_array = np.asarray(point)
+    before_array = np.asarray((p_before.x, p_before.y, p_before.z))
+    after_array = np.asarray((p_after.x, p_after.y, p_after.z))
+    equidistance_error = abs(float(np.linalg.norm(point_array - before_array) - np.linalg.norm(point_array - after_array)))
+    return {
+        "alpha": 0.5,
+        "time": midpoint["time"],
+        "point": point,
+        "error": equidistance_error,
+        "fallback": False,
+        "solve_mode": "anchor_bisector",
+    }
 
 
 def select_release_index(points: Sequence[BallPoint], start_idx: int, end_idx: int) -> Optional[int]:
-    """Return a simple release index by scoring candidate points with a projectile fit.
-
-    The detector examines points between start_idx and end_idx and prefers a
-    candidate that is near the 13 m x-gate, has a strong acceleration increase,
-    and is followed by a projectile-like segment.
-    """
+    """Compatibility wrapper returning the first backward-detected projectile sample."""
     if not points:
         return None
-    start_idx = max(0, min(start_idx, len(points) - 1))
-    end_idx = max(start_idx, min(end_idx, len(points) - 1))
-
-    candidates: List[ReleaseCandidate] = []
-    for idx in range(start_idx, end_idx + 1):
-        if abs(points[idx].x) > 14:
-            continue
-        if idx < start_idx + 2:
-            continue
-        cand = _candidate_score(points, idx, start_idx, end_idx)
-        candidates.append(cand)
-
-    if not candidates:
-        return None
-
-    threshold = 0.9
-    strong_candidates = [cand for cand in candidates if cand.score >= threshold]
-    if strong_candidates:
-        return min(strong_candidates, key=lambda c: c.idx).idx
-
-    best = max(candidates, key=lambda c: c.score)
-    return best.idx
+    backward = detect_backward_projectile_segment(points, start_idx, end_idx)
+    return int(backward["first_projectile_idx"]) if backward is not None else None
 
 
 def compute_velocity_acceleration_from_points(points: Sequence[BallPoint]) -> Tuple[List[Optional[float]], List[Optional[float]]]:
@@ -657,10 +777,69 @@ def detect_simple_release_point(
     if not include_deflections and _has_deflection(points, start_idx, end_idx):
         raise ValueError(f"Penalty {penalty_row.get('id', 'unknown')} has a deflection and is excluded")
 
-    release_idx = select_release_index(points, start_idx, end_idx)
-    if release_idx is None:
-        release_idx = max(start_idx, min(end_idx, start_idx + 2))
+    segment = detect_backward_projectile_segment(points, start_idx, end_idx)
+    if segment is None:
+        raise ValueError(f"Penalty {penalty_row.get('id', 'unknown')} has fewer than three usable clean projectile samples")
+    first_projectile_idx = int(segment["first_projectile_idx"])
+    last_non_projectile_idx = int(segment["last_non_projectile_idx"])
+    projectile_end_idx = int(segment["projectile_end_idx"])
+    model = segment["projectile_model"]
+    release_idx = first_projectile_idx
 
+    release_interval_start_idx = last_non_projectile_idx
+    release_interval_end_idx = first_projectile_idx
+    before, after = points[release_interval_start_idx], points[release_interval_end_idx]
+    midpoint = estimate_release_midpoint(before, after)
+    solved = estimate_release_solved(before, after, segment["anchor_model"])
+    distance_before_prior = 20.0 - abs(float(solved["point"][0]))
+    distance_after_prior = distance_before_prior
+    release_boundary_shift = 0
+    distance_prior_applied = False
+
+    # The projectile boundary says when free flight is certainly established;
+    # the physical release may be one measurement interval earlier. Apply this
+    # soft spatial prior without changing any projectile-related index/model.
+    if distance_before_prior < 6.4 and last_non_projectile_idx - 1 >= start_idx:
+        earlier_start = last_non_projectile_idx - 1
+        earlier_end = last_non_projectile_idx
+        earlier_before, earlier_after = points[earlier_start], points[earlier_end]
+        valid_time = earlier_after.local_dt > earlier_before.local_dt
+        if valid_time:
+            earlier_solved = estimate_release_solved(earlier_before, earlier_after, segment["anchor_model"])
+            earlier_distance = 20.0 - abs(float(earlier_solved["point"][0]))
+            earlier_diag = _evaluate_projectile_candidate(
+                earlier_before, earlier_after, segment["anchor_points"],
+                segment["anchor_model"], segment["anchor_tolerances"],
+            )
+            tolerances = segment["anchor_tolerances"]
+            grossly_implausible = (
+                earlier_diag["extreme"]
+                or earlier_diag["xy_line_residual"] > 3.0 * tolerances["xy_line"]
+            )
+
+            def distance_cost(distance: float) -> float:
+                return 0.0 if distance >= 6.4 else ((6.4 - distance) / 0.4) ** 2
+
+            current_cost = float(segment["por_boundary_normalized_error"]) + distance_cost(distance_before_prior)
+            earlier_cost = float(earlier_diag["normalized_error"]) + distance_cost(earlier_distance)
+            choose_earlier = (
+                not grossly_implausible
+                and (distance_before_prior < 6.0 or earlier_cost < current_cost)
+            )
+            if choose_earlier:
+                release_interval_start_idx = earlier_start
+                release_interval_end_idx = earlier_end
+                before, after = earlier_before, earlier_after
+                midpoint = estimate_release_midpoint(before, after)
+                solved = earlier_solved
+                distance_after_prior = earlier_distance
+                release_boundary_shift = -1
+                distance_prior_applied = True
+    release_dt = solved["time"]
+    release_xyz = solved["point"]
+    fitted_velocity = model.velocity_at(release_dt) if model is not None else (float("nan"),) * 3
+    fitted_speed = math.sqrt(sum(v * v for v in fitted_velocity)) if model is not None else None
+    fitted_direction = math.degrees(math.atan2(fitted_velocity[1], fitted_velocity[0])) if model is not None else None
     release_point = points[release_idx]
     window_points = points[start_idx:end_idx + 1]
     # Keep both index spaces explicit:
@@ -699,18 +878,47 @@ def detect_simple_release_point(
         "release_idx": release_idx_local,
         "release_idx_global": release_idx_global,
         "release_point": {
-            "t_local": release_point.local_dt.isoformat(timespec="milliseconds"),
-            "ts_ms": release_point.ts_ms,
-            "x": release_point.x,
-            "y": release_point.y,
-            "z": release_point.z,
-            "v": None if math.isnan(release_point.speed) else release_point.speed,
-            "a": None if math.isnan(release_point.accel) else release_point.accel,
-            "dir": release_point.direction,
+            "t_local": release_dt.isoformat(timespec="milliseconds"),
+            "ts_ms": int(before.ts_ms + solved["alpha"] * (after.ts_ms - before.ts_ms)) if before.ts_ms is not None and after.ts_ms is not None else None,
+            "x": release_xyz[0], "y": release_xyz[1], "z": release_xyz[2],
+            "v": fitted_speed, "a": None, "dir": fitted_direction,
         },
-        "release_speed": None if math.isnan(release_point.speed) else release_point.speed,
-        "release_accel": None if math.isnan(release_point.accel) else release_point.accel,
-        "release_direction": release_point.direction,
+        "release_speed": fitted_speed,
+        "release_accel": None,
+        "release_direction": fitted_direction,
+        "raw_hbl_release_speed": None if math.isnan(release_point.speed) else release_point.speed,
+        "raw_hbl_release_accel": None if math.isnan(release_point.accel) else release_point.accel,
+        "raw_hbl_release_direction": release_point.direction,
+        "last_non_projectile_idx": last_non_projectile_idx - start_idx,
+        "first_projectile_idx": first_projectile_idx - start_idx,
+        "projectile_end_idx": projectile_end_idx - start_idx,
+        "release_interval_start_idx": release_interval_start_idx - start_idx,
+        "release_interval_end_idx": release_interval_end_idx - start_idx,
+        "release_boundary_shift": release_boundary_shift,
+        "release_distance_prior_applied": distance_prior_applied,
+        "release_distance_before_prior": distance_before_prior,
+        "release_distance_after_prior": distance_after_prior,
+        "por_anchor_start_idx": int(segment["anchor_start_idx"]) - start_idx,
+        "por_anchor_point_count": segment["por_anchor_point_count"],
+        "por_anchor_low_confidence": segment["por_anchor_low_confidence"],
+        "por_x_residual": segment["por_x_residual"],
+        "por_y_residual": segment["por_y_residual"],
+        "por_z_residual": segment["por_z_residual"],
+        "por_xy_line_residual": segment["por_xy_line_residual"],
+        "por_dx_ratio": segment["por_dx_ratio"],
+        "por_boundary_normalized_error": segment["por_boundary_normalized_error"],
+        "por_boundary_confidence": segment["por_boundary_confidence"],
+        "release_alpha_midpoint": midpoint["alpha"],
+        "release_time_midpoint": midpoint["time"].isoformat(timespec="milliseconds"),
+        "release_point_midpoint": {"x": midpoint["point"][0], "y": midpoint["point"][1], "z": midpoint["point"][2]},
+        "release_alpha_solved": solved["alpha"],
+        "release_solved_error": solved["error"],
+        "release_solved_fallback": solved["fallback"],
+        "release_solved_mode": solved["solve_mode"],
+        "release_time_solved": release_dt.isoformat(timespec="milliseconds"),
+        "release_point_solved": {"x": release_xyz[0], "y": release_xyz[1], "z": release_xyz[2]},
+        "release_speed_solved": fitted_speed,
+        "release_direction_solved": fitted_direction,
         "start_idx": start_idx,
         "end_idx": end_idx,
         "trajectory_points": len(points[start_idx:end_idx + 1]),
@@ -815,6 +1023,39 @@ def process_penalties_csv(
             "release_speed": result.get("release_speed"),
             "release_accel": result.get("release_accel"),
             "release_direction": result.get("release_direction"),
+            "raw_hbl_release_speed": result.get("raw_hbl_release_speed"),
+            "raw_hbl_release_accel": result.get("raw_hbl_release_accel"),
+            "raw_hbl_release_direction": result.get("raw_hbl_release_direction"),
+            "last_non_projectile_idx": result.get("last_non_projectile_idx"),
+            "first_projectile_idx": result.get("first_projectile_idx"),
+            "projectile_end_idx": result.get("projectile_end_idx"),
+            "release_interval_start_idx": result.get("release_interval_start_idx"),
+            "release_interval_end_idx": result.get("release_interval_end_idx"),
+            "release_boundary_shift": result.get("release_boundary_shift"),
+            "release_distance_prior_applied": result.get("release_distance_prior_applied"),
+            "release_distance_before_prior": result.get("release_distance_before_prior"),
+            "release_distance_after_prior": result.get("release_distance_after_prior"),
+            "por_anchor_start_idx": result.get("por_anchor_start_idx"),
+            "por_anchor_point_count": result.get("por_anchor_point_count"),
+            "por_anchor_low_confidence": result.get("por_anchor_low_confidence"),
+            "por_x_residual": result.get("por_x_residual"),
+            "por_y_residual": result.get("por_y_residual"),
+            "por_z_residual": result.get("por_z_residual"),
+            "por_xy_line_residual": result.get("por_xy_line_residual"),
+            "por_dx_ratio": result.get("por_dx_ratio"),
+            "por_boundary_normalized_error": result.get("por_boundary_normalized_error"),
+            "por_boundary_confidence": result.get("por_boundary_confidence"),
+            "release_alpha_midpoint": result.get("release_alpha_midpoint"),
+            "release_time_midpoint": result.get("release_time_midpoint"),
+            "release_point_midpoint_json": json.dumps(result.get("release_point_midpoint", {}), ensure_ascii=False, separators=(",", ":")),
+            "release_alpha_solved": result.get("release_alpha_solved"),
+            "release_solved_error": result.get("release_solved_error"),
+            "release_solved_fallback": result.get("release_solved_fallback"),
+            "release_solved_mode": result.get("release_solved_mode"),
+            "release_time_solved": result.get("release_time_solved"),
+            "release_point_solved_json": json.dumps(result.get("release_point_solved", {}), ensure_ascii=False, separators=(",", ":")),
+            "release_speed_solved": result.get("release_speed_solved"),
+            "release_direction_solved": result.get("release_direction_solved"),
             "max_v": result.get("max_v"),
             "max_a": result.get("max_a"),
             "velocity_per_point": result.get("velocity_per_point", []),
@@ -827,6 +1068,19 @@ def process_penalties_csv(
             "error": result.get("error", ""),
         }
         records.append(record)
+
+    solved_alphas = [
+        float(r["release_alpha_solved"])
+        for r in records
+        if r.get("release_alpha_solved") not in (None, "") and not r.get("release_solved_fallback")
+    ]
+    if solved_alphas:
+        near_one = sum(alpha >= 0.95 for alpha in solved_alphas)
+        logger.info(
+            "Solved alpha diagnostics: n=%d median=%.3f range=[%.3f, %.3f], alpha>=0.95: %d (%.1f%%)",
+            len(solved_alphas), float(np.median(solved_alphas)), min(solved_alphas), max(solved_alphas),
+            near_one, 100.0 * near_one / len(solved_alphas),
+        )
 
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
@@ -844,6 +1098,39 @@ def process_penalties_csv(
         "release_speed",
         "release_accel",
         "release_direction",
+        "raw_hbl_release_speed",
+        "raw_hbl_release_accel",
+        "raw_hbl_release_direction",
+        "last_non_projectile_idx",
+        "first_projectile_idx",
+        "projectile_end_idx",
+        "release_interval_start_idx",
+        "release_interval_end_idx",
+        "release_boundary_shift",
+        "release_distance_prior_applied",
+        "release_distance_before_prior",
+        "release_distance_after_prior",
+        "por_anchor_start_idx",
+        "por_anchor_point_count",
+        "por_anchor_low_confidence",
+        "por_x_residual",
+        "por_y_residual",
+        "por_z_residual",
+        "por_xy_line_residual",
+        "por_dx_ratio",
+        "por_boundary_normalized_error",
+        "por_boundary_confidence",
+        "release_alpha_midpoint",
+        "release_time_midpoint",
+        "release_point_midpoint_json",
+        "release_alpha_solved",
+        "release_solved_error",
+        "release_solved_fallback",
+        "release_solved_mode",
+        "release_time_solved",
+        "release_point_solved_json",
+        "release_speed_solved",
+        "release_direction_solved",
         "max_v",
         "max_a",
         "velocity_per_point",

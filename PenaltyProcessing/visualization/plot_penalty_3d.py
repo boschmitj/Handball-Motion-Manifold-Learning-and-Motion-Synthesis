@@ -90,6 +90,14 @@ def parse_release_point_json(s: str) -> Optional[Dict[str, Any]]:
             return None
 
 
+def parse_optional_index(value: Any, point_count: int) -> Optional[int]:
+    try:
+        idx = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return idx if 0 <= idx < point_count else None
+
+
 def smooth_series(values: np.ndarray, window: int) -> np.ndarray:
     if window <= 1 or len(values) < window:
         return values
@@ -198,6 +206,59 @@ def plot_shot(
     ax.scatter([xs[max_v_idx]], [ys[max_v_idx]], [zs[max_v_idx]], color="orange", s=80, marker="D", label="max_v")
     ax.scatter([xs[max_a_idx]], [ys[max_a_idx]], [zs[max_a_idx]], color="purple", s=80, marker="s", label="max_a")
 
+    # Backward-detector boundary samples use indices in the original (not
+    # decimated) trajectory array.
+    boundary_styles = {
+        "last_non_projectile_idx": ("#d62728", "o", "last non-projectile"),
+        "first_projectile_idx": ("#2ca02c", "P", "first projectile"),
+        "projectile_end_idx": ("#17becf", "X", "projectile end"),
+    }
+    boundary_indices: Dict[str, int] = {}
+    for field, (color, marker, label) in boundary_styles.items():
+        idx = parse_optional_index(metadata.get(field), len(traj_points))
+        if idx is None:
+            continue
+        boundary_indices[field] = idx
+        point = traj_points[idx]
+        ax.scatter([float(point["x"])], [float(point["y"])], [float(point["z"])],
+                   color=color, edgecolor="black", s=105, marker=marker, label=label)
+
+    before_idx = boundary_indices.get("last_non_projectile_idx")
+    after_idx = boundary_indices.get("first_projectile_idx")
+    if before_idx is not None and after_idx is not None:
+        before, after = traj_points[before_idx], traj_points[after_idx]
+        ax.plot([float(before["x"]), float(after["x"])],
+                [float(before["y"]), float(after["y"])],
+                [float(before["z"]), float(after["z"])],
+                color="#888888", linewidth=2.0, linestyle="--", alpha=0.8, label="classifier interval")
+
+    selected_start = parse_optional_index(metadata.get("release_interval_start_idx"), len(traj_points))
+    selected_end = parse_optional_index(metadata.get("release_interval_end_idx"), len(traj_points))
+    if selected_start is not None and selected_end is not None:
+        selected = (traj_points[selected_start], traj_points[selected_end])
+        ax.plot([float(point["x"]) for point in selected],
+                [float(point["y"]) for point in selected],
+                [float(point["z"]) for point in selected],
+                color="#ff1493", linewidth=4.0, alpha=0.9, label="selected release interval")
+
+    anchor_idx = parse_optional_index(metadata.get("por_anchor_start_idx"), len(traj_points))
+    projectile_end_idx = boundary_indices.get("projectile_end_idx")
+    if anchor_idx is not None and projectile_end_idx is not None and anchor_idx <= projectile_end_idx:
+        anchor = traj_points[anchor_idx:projectile_end_idx + 1]
+        ax.plot([float(point["x"]) for point in anchor],
+                [float(point["y"]) for point in anchor],
+                [float(point["z"]) for point in anchor],
+                color="#00bcd4", linewidth=3.2, alpha=0.9, label="clean anchor")
+
+    for field, color, marker, label in (
+        ("release_point_midpoint_json", "#ff7f0e", "v", "PoR midpoint"),
+        ("release_point_solved_json", "#e377c2", "^", "PoR solved"),
+    ):
+        point = parse_release_point_json(metadata.get(field, ""))
+        if point and all(point.get(axis) is not None for axis in ("x", "y", "z")):
+            ax.scatter([float(point["x"])], [float(point["y"])], [float(point["z"])],
+                       color=color, edgecolor="black", s=115, marker=marker, label=label)
+
     # release point: parse directly from release_point_json
     release_point = parse_release_point_json(metadata.get("release_point_json", ""))
     if release_point:
@@ -205,7 +266,8 @@ def plot_shot(
         ry = release_point.get("y")
         rz = release_point.get("z")
         if all(v is not None for v in (rx, ry, rz)):
-            ax.scatter([rx], [ry], [rz], color="yellow", s=80, marker="^", label="release")
+            ax.scatter([rx], [ry], [rz], facecolor="none", edgecolor="yellow", linewidth=2.0,
+                       s=150, marker="o", label="selected release")
 
     if goalkeeper_points:
         gxs = np.array([float(p.get("x", 0)) for p in goalkeeper_points])
@@ -229,7 +291,15 @@ def format_release_point_label(metadata: Dict[str, Any]) -> str:
         z = release_point.get("z")
         release_time = release_point.get("t_local") or metadata.get("release_time_local", "")
         coord_text = f"({x:.2f}, {y:.2f}, {z:.2f})" if all(v is not None for v in (x, y, z)) else "unknown"
-        return f"Shot id: {shot_id}\nRelease point: {coord_text}\nRelease time: {release_time}"
+        shift = metadata.get("release_boundary_shift", "")
+        before = metadata.get("release_distance_before_prior", "")
+        after = metadata.get("release_distance_after_prior", "")
+        try:
+            distance_text = f"{float(before):.2f} → {float(after):.2f} m"
+        except (TypeError, ValueError):
+            distance_text = "unavailable"
+        return (f"Shot id: {shot_id}\nRelease point: {coord_text}\nRelease time: {release_time}"
+                f"\nBoundary shift: {shift}\nGoal distance: {distance_text}")
 
     release_time = metadata.get("release_time_local", "")
     return f"Shot id: {shot_id}\nRelease point: unavailable\nRelease time: {release_time}"

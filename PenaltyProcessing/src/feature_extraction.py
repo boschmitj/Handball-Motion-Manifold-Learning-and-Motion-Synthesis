@@ -27,11 +27,14 @@ import numpy as np
 import pandas as pd
 
 # Common elapsed times (ms) after PoR at which throws are compared (per
-# mocap_league_throw_matching.md); 50 ms steps match the League's 20 Hz rate.
+# mocap_league_throw_matching.md). The synthetic League PoR lies halfway
+# between samples, while spatial-prior shifts and legacy detections can produce
+# other phases. Expose both 25 ms phases; sparse League rows populate only
+# their real timestamps, while dense 300 Hz Mocap rows populate both.
 # Most throws will not have valid data at every step up to 1000 ms - Mocap
 # trajectories are truncated at the free-flight cutoff (wall hit / ball
 # becomes unidentified) and later steps are correctly left as None.
-COMMON_TIME_STEPS_MS: List[int] = list(range(0, 1001, 50))
+COMMON_TIME_STEPS_MS: List[int] = list(range(0, 1001, 25))
 
 
 def _sample_at_times(
@@ -39,7 +42,8 @@ def _sample_at_times(
     sampling_rate_hz: float,
     values: np.ndarray,
     target_times_ms: List[int],
-    max_gap_ms: float = 26.0,
+    max_gap_ms: float = 5.0,
+    elapsed_times_ms: Optional[np.ndarray] = None,
 ) -> List[Optional[float]]:
     """Look up ``values`` at the native sample nearest each target elapsed time.
 
@@ -55,7 +59,10 @@ def _sample_at_times(
     if len(frame_rel) == 0 or sampling_rate_hz <= 0:
         return [None] * len(target_times_ms)
 
-    t_ms = frame_rel.astype(np.float64) * (1000.0 / sampling_rate_hz)
+    if elapsed_times_ms is not None and len(elapsed_times_ms) == len(frame_rel):
+        t_ms = elapsed_times_ms.astype(np.float64)
+    else:
+        t_ms = frame_rel.astype(np.float64) * (1000.0 / sampling_rate_hz)
     order = np.argsort(t_ms)
     t_ms = t_ms[order]
     values = values[order]
@@ -87,6 +94,8 @@ def extract_features_from_row(row: pd.Series) -> Dict[str, Any]:
     sampling_rate_hz = float(row.get("sampling_rate_hz", 0.0) or 0.0)
 
     frame_rel = np.array([p.get("frame", i) for i, p in enumerate(trajectory)], dtype=np.float64)
+    explicit_times = np.array([_json_field(p, "t_since_ms") for p in trajectory], dtype=np.float64)
+    elapsed_times_ms = explicit_times if len(explicit_times) and np.all(np.isfinite(explicit_times)) else None
     xs = np.array([_json_field(p, "x") for p in trajectory], dtype=np.float64)
     ys = np.array([_json_field(p, "y") for p in trajectory], dtype=np.float64)
     zs = np.array([_json_field(p, "z") for p in trajectory], dtype=np.float64)
@@ -112,17 +121,23 @@ def extract_features_from_row(row: pd.Series) -> Dict[str, Any]:
         "trajectory_point_count": row.get("trajectory_point_count"),
         "trajectory_duration_ms": row.get("trajectory_duration_ms"),
         "sampling_rate_hz": sampling_rate_hz,
+        "release_timing_type": row.get("release_timing_type", "native"),
+        "first_projectile_offset_ms": row.get("first_projectile_offset_ms"),
     }
 
-    v_at = _sample_at_times(frame_rel, sampling_rate_hz, vs, COMMON_TIME_STEPS_MS)
-    d_at = _sample_at_times(frame_rel, sampling_rate_hz, dirs, COMMON_TIME_STEPS_MS)
-    x_at = _sample_at_times(frame_rel, sampling_rate_hz, xs, COMMON_TIME_STEPS_MS)
-    y_at = _sample_at_times(frame_rel, sampling_rate_hz, ys, COMMON_TIME_STEPS_MS)
-    z_at = _sample_at_times(frame_rel, sampling_rate_hz, zs, COMMON_TIME_STEPS_MS)
-    vx_at = _sample_at_times(frame_rel, sampling_rate_hz, vxs, COMMON_TIME_STEPS_MS)
-    vy_at = _sample_at_times(frame_rel, sampling_rate_hz, vys, COMMON_TIME_STEPS_MS)
-    vz_at = _sample_at_times(frame_rel, sampling_rate_hz, vzs, COMMON_TIME_STEPS_MS)
-    vert_angle_at = _sample_at_times(frame_rel, sampling_rate_hz, vert_angles, COMMON_TIME_STEPS_MS)
+    sample_args = (frame_rel, sampling_rate_hz)
+    # Do not let a League point fill the opposite 25 ms phase. Mocap has a
+    # native point within 1.67 ms of every target on this grid.
+    sample_kwargs = {"elapsed_times_ms": elapsed_times_ms, "max_gap_ms": 5.0}
+    v_at = _sample_at_times(*sample_args, vs, COMMON_TIME_STEPS_MS, **sample_kwargs)
+    d_at = _sample_at_times(*sample_args, dirs, COMMON_TIME_STEPS_MS, **sample_kwargs)
+    x_at = _sample_at_times(*sample_args, xs, COMMON_TIME_STEPS_MS, **sample_kwargs)
+    y_at = _sample_at_times(*sample_args, ys, COMMON_TIME_STEPS_MS, **sample_kwargs)
+    z_at = _sample_at_times(*sample_args, zs, COMMON_TIME_STEPS_MS, **sample_kwargs)
+    vx_at = _sample_at_times(*sample_args, vxs, COMMON_TIME_STEPS_MS, **sample_kwargs)
+    vy_at = _sample_at_times(*sample_args, vys, COMMON_TIME_STEPS_MS, **sample_kwargs)
+    vz_at = _sample_at_times(*sample_args, vzs, COMMON_TIME_STEPS_MS, **sample_kwargs)
+    vert_angle_at = _sample_at_times(*sample_args, vert_angles, COMMON_TIME_STEPS_MS, **sample_kwargs)
 
     # Velocity/direction evolution + PoR-relative trajectory/displacement,
     # sampled at common elapsed times so Mocap (300 Hz) and League (20 Hz)

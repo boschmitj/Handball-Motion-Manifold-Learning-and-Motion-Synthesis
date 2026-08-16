@@ -118,7 +118,6 @@ from fixture_resolution import build_fixture_index, resolve_fixture_file, build_
 from penalty_time_utils import parse_penalty_local_time, parse_position_local_time, try_float, try_int
 from release_detector_trajectory_based import (
     compute_velocity_acceleration_from_points,
-    select_release_index,
     _rotate_180_z,
     _is_left_side,
 )
@@ -159,6 +158,8 @@ class ThrowRepresentation:
     # Native sampling rate of the source (300.0 for Mocap, 20.0 for League),
     # needed to downsample Mocap frames to the League rate later.
     sampling_rate_hz: float = 0.0
+    release_timing_type: str = "native"
+    first_projectile_offset_ms: Optional[float] = None
     # Full-throw info (for throw_index.csv)
     full_trajectory_json: Optional[str] = None
     full_trajectory_point_count: Optional[int] = None
@@ -327,8 +328,8 @@ def compute_kinematics_from_points(
 def po_relative_trajectory(
     points: List[BallPoint],
     por_idx: int,
-    frame_numbers: Optional[List[int]] = None,
-) -> Tuple[List[BallPoint], List[float], List[float], List[float], List[float], List[int]]:
+    frame_numbers: Optional[List[float]] = None,
+) -> Tuple[List[BallPoint], List[float], List[float], List[float], List[float], List[float]]:
     """
     Return PoR-relative trajectory starting from (0,0,0).
 
@@ -366,7 +367,7 @@ def po_relative_trajectory(
     speeds: List[Optional[float]] = []
     accels: List[Optional[float]] = []
     dirs: List[Optional[float]] = []
-    frame_rel: List[int] = []
+    frame_rel: List[float] = []
 
     for i, p in enumerate(points):
         # PoR-relative position (points already in metres)
@@ -405,7 +406,8 @@ def _clean_float(value: Optional[float]) -> Optional[float]:
 
 def serialize_trajectory_with_frames(
     points: List[BallPoint],
-    frame_rel: List[int],
+    frame_rel: List[float],
+    t_since_ms: Optional[List[float]] = None,
     vxs: Optional[List[Optional[float]]] = None,
     vys: Optional[List[Optional[float]]] = None,
     vzs: Optional[List[Optional[float]]] = None,
@@ -426,6 +428,7 @@ def serialize_trajectory_with_frames(
         payload.append(
             {
                 "frame": fr,
+                "t_since_ms": t_since_ms[i] if t_since_ms is not None and i < len(t_since_ms) else None,
                 "t_local": p.local_dt.isoformat(timespec="milliseconds"),
                 "ts_ms": p.ts_ms,
                 "x": p.x,
@@ -579,6 +582,7 @@ def load_league_throws(
             por_x = try_float(release_point.get("x", "0"))
             por_y = try_float(release_point.get("y", "0"))
             por_z = try_float(release_point.get("z", "0"))
+            por_dt = parse_position_local_time(release_point.get("t_local", ""))
 
             # Parse trajectory
             traj_json = row.get("trajectory_json", "[]")
@@ -616,35 +620,43 @@ def load_league_throws(
                 ball_points = _rotate_180_z(ball_points)
                 por_x, por_y, por_z = -por_x, -por_y, por_z
 
-            # Find PoR index in the trajectory
-            # The release_point_json should have the PoR position
-            # We need to find the index where the point matches the release point
-            por_idx = None
-            for i, bp in enumerate(ball_points):
-                if (abs(bp.x - por_x) < 0.01 and abs(bp.y - por_y) < 0.01
-                        and abs(bp.z - por_z) < 0.01):
-                    por_idx = i
-                    break
+            # The detected PoR is synthetic and normally lies halfway between
+            # two measured samples, so it must be inserted as a real trajectory
+            # point rather than replaced by ``release_idx`` (the first measured
+            # projectile sample).
+            first_projectile_idx = try_int(row.get("first_projectile_idx", ""))
+            if first_projectile_idx is None:
+                first_projectile_idx = try_int(row.get("release_idx", ""))
+            projectile_end_idx = try_int(row.get("projectile_end_idx", ""))
+            if first_projectile_idx is None or not 0 <= first_projectile_idx < len(ball_points):
+                raise ValueError("League CSV has no valid first_projectile_idx/release_idx")
+            if projectile_end_idx is None or not first_projectile_idx <= projectile_end_idx < len(ball_points):
+                projectile_end_idx = len(ball_points) - 1
+            if por_dt is None:
+                before_idx = max(0, first_projectile_idx - 1)
+                por_dt = ball_points[before_idx].local_dt + (
+                    ball_points[first_projectile_idx].local_dt - ball_points[before_idx].local_dt
+                ) * 0.5
 
-            if por_idx is None:
-                # Use the release_idx from the row
-                release_idx = try_int(row.get("release_idx", ""))
-                if release_idx is not None and 0 <= release_idx < len(ball_points):
-                    por_idx = release_idx
-
-            # Compute PoR-relative trajectory (frame_numbers defaults to list
-            # index, i.e. the League positions are assumed uniformly sampled
-            # at LEAGUE_SAMPLING_RATE_HZ)
-            if por_idx is not None and 0 <= por_idx < len(ball_points):
-                rel_points, t_since, rel_speeds, rel_accels, rel_dirs, frame_rel = po_relative_trajectory(
-                    ball_points, por_idx
-                )
-            else:
-                # Fallback: just use first point as PoR
-                por_idx = 0
-                rel_points, t_since, rel_speeds, rel_accels, rel_dirs, frame_rel = po_relative_trajectory(
-                    ball_points, 0
-                )
+            synthetic_por = BallPoint(
+                local_dt=por_dt,
+                ts_ms=try_int(release_point.get("ts_ms", "")),
+                x=float(por_x), y=float(por_y), z=float(por_z),
+                speed=try_float(row.get("release_speed_solved", row.get("release_speed", ""))) or float("nan"),
+                accel=float("nan"),
+                direction=try_float(row.get("release_direction_solved", row.get("release_direction", ""))),
+            )
+            ball_points = [synthetic_por, *ball_points[first_projectile_idx:projectile_end_idx + 1]]
+            por_idx = 0
+            # Fractional League-frame coordinates preserve the half-frame first
+            # interval: normally 0, 0.5, 1.5, 2.5, ... at 20 Hz.
+            league_frames = [
+                (point.local_dt - por_dt).total_seconds() * LEAGUE_SAMPLING_RATE_HZ
+                for point in ball_points
+            ]
+            rel_points, t_since, rel_speeds, rel_accels, rel_dirs, frame_rel = po_relative_trajectory(
+                ball_points, por_idx, frame_numbers=league_frames
+            )
 
             # trajectory duration (from first to last point)
             if len(t_since) >= 2:
@@ -696,7 +708,7 @@ def load_league_throws(
             # components/vertical angle, always recomputed regardless of
             # --direction-source since they aren't provided by the source data)
             traj_ser = serialize_trajectory_with_frames(
-                enhanced_rel_points, frame_rel,
+                enhanced_rel_points, frame_rel, t_since_ms=t_since,
                 vxs=computed_vxs, vys=computed_vys, vzs=computed_vzs, vert_angles=computed_vert_angles,
             ) if enhanced_rel_points else "[]"
 
@@ -711,11 +723,18 @@ def load_league_throws(
                 trajectory_point_count=len(rel_points),
                 trajectory_duration_ms=float(duration_ms),
                 sampling_rate_hz=LEAGUE_SAMPLING_RATE_HZ,
+                release_timing_type=(
+                    "half_frame_adjacent" if len(t_since) > 1 and 15.0 <= t_since[1] <= 35.0
+                    else "half_frame_shifted" if len(t_since) > 1 and 65.0 <= t_since[1] <= 85.0
+                    else "on_frame" if len(t_since) > 1 and 40.0 <= t_since[1] <= 60.0
+                    else "irregular"
+                ),
+                first_projectile_offset_ms=float(t_since[1]) if len(t_since) > 1 else None,
                 full_trajectory_json=traj_json,
-                full_trajectory_point_count=len(ball_points),
-                por_index_in_full=por_idx,
+                full_trajectory_point_count=len(trajectory),
+                por_index_in_full=None,  # synthetic PoR is not present in the source full trajectory
                 segment_start_global_idx=None,  # League has no "segment start" in same sense
-                por_global_idx=por_idx,
+                por_global_idx=None,
                 valid=True,
             )
             representations.append(rep)
@@ -761,6 +780,8 @@ def load_league_throws_from_csv(csv_path: Path) -> List[ThrowRepresentation]:
                 trajectory_point_count=try_int(row.get("trajectory_point_count", "0")) or 0,
                 trajectory_duration_ms=try_float(row.get("trajectory_duration_ms", "0")) or 0.0,
                 sampling_rate_hz=try_float(row.get("sampling_rate_hz", "20.0")) or LEAGUE_SAMPLING_RATE_HZ,
+                release_timing_type=row.get("release_timing_type", "native") or "native",
+                first_projectile_offset_ms=try_float(row.get("first_projectile_offset_ms", "")),
                 valid=(row.get("valid", "True").strip().lower() == "true"),
                 error=row.get("error", ""),
             )
@@ -1092,7 +1113,7 @@ def process_mocap_recording(
             )
 
         traj_ser = serialize_trajectory_with_frames(
-            enhanced_rel_points, frame_rel,
+            enhanced_rel_points, frame_rel, t_since_ms=t_since,
             vxs=computed_vxs, vys=computed_vys, vzs=computed_vzs, vert_angles=computed_vert_angles,
         ) if enhanced_rel_points else "[]"
 
@@ -1128,6 +1149,8 @@ def process_mocap_recording(
             trajectory_point_count=len(rel_points),
             trajectory_duration_ms=float(duration_ms),
             sampling_rate_hz=MOCAP_SAMPLING_RATE_HZ,
+            release_timing_type="dense_native",
+            first_projectile_offset_ms=(t_since[por_idx_in_points + 1] if por_idx_in_points + 1 < len(t_since) else None),
             full_trajectory_json=full_traj_ser,
             full_trajectory_point_count=len(all_ball_points),
             por_index_in_full=por_idx_in_points,
@@ -1176,6 +1199,7 @@ def write_raw_mocap_csv(representations: List[ThrowRepresentation], output_path:
         "release_speed_m_s", "release_direction_deg", "release_height_m",
         "trajectory_json",
         "trajectory_point_count", "trajectory_duration_ms", "sampling_rate_hz",
+        "release_timing_type", "first_projectile_offset_ms",
         "valid", "error",
     ]
 
@@ -1198,6 +1222,8 @@ def write_raw_mocap_csv(representations: List[ThrowRepresentation], output_path:
                 "trajectory_point_count": rep.trajectory_point_count,
                 "trajectory_duration_ms": rep.trajectory_duration_ms,
                 "sampling_rate_hz": rep.sampling_rate_hz,
+                "release_timing_type": rep.release_timing_type,
+                "first_projectile_offset_ms": rep.first_projectile_offset_ms,
                 "valid": rep.valid,
                 "error": rep.error,
             }
@@ -1213,6 +1239,7 @@ def write_raw_league_csv(representations: List[ThrowRepresentation], output_path
         "release_speed_m_s", "release_direction_deg", "release_height_m",
         "trajectory_json",
         "trajectory_point_count", "trajectory_duration_ms", "sampling_rate_hz",
+        "release_timing_type", "first_projectile_offset_ms",
         "valid", "error",
     ]
 
@@ -1235,6 +1262,8 @@ def write_raw_league_csv(representations: List[ThrowRepresentation], output_path
                 "trajectory_point_count": rep.trajectory_point_count,
                 "trajectory_duration_ms": rep.trajectory_duration_ms,
                 "sampling_rate_hz": rep.sampling_rate_hz,
+                "release_timing_type": rep.release_timing_type,
+                "first_projectile_offset_ms": rep.first_projectile_offset_ms,
                 "valid": rep.valid,
                 "error": rep.error,
             }
