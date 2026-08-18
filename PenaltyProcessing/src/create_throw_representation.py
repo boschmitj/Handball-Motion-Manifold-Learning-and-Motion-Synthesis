@@ -446,12 +446,13 @@ def serialize_trajectory_with_frames(
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
-def find_goal_line_crossing_idx(points: List[BallPoint]) -> Optional[int]:
+def find_goal_line_crossing_idx(points: List[BallPoint], start_idx: int = 0) -> Optional[int]:
     """
     Return the first index where |x| > 20 m (goal line crossed).
     Goal lines are at x = +20 and x = -20 in League canonical coords.
     """
-    for i, p in enumerate(points):
+    for i in range(max(0, start_idx), len(points)):
+        p = points[i]
         if abs(p.x) > 20.0:
             return i
     return None
@@ -627,11 +628,16 @@ def load_league_throws(
             first_projectile_idx = try_int(row.get("first_projectile_idx", ""))
             if first_projectile_idx is None:
                 first_projectile_idx = try_int(row.get("release_idx", ""))
-            projectile_end_idx = try_int(row.get("projectile_end_idx", ""))
             if first_projectile_idx is None or not 0 <= first_projectile_idx < len(ball_points):
                 raise ValueError("League CSV has no valid first_projectile_idx/release_idx")
-            if projectile_end_idx is None or not first_projectile_idx <= projectile_end_idx < len(ball_points):
-                projectile_end_idx = len(ball_points) - 1
+            # ``projectile_end_idx`` belongs to PoR detection and deliberately
+            # stops before a detected bounce. Do not reuse it for Phase 3: the
+            # raw League continuation must retain the bounce and rebound until
+            # the first goal-line crossing. This leaves release detection
+            # completely unchanged while giving reconstruction the full path.
+            continuation_end_idx = find_goal_line_crossing_idx(ball_points, first_projectile_idx)
+            if continuation_end_idx is None:
+                continuation_end_idx = len(ball_points) - 1
             if por_dt is None:
                 before_idx = max(0, first_projectile_idx - 1)
                 por_dt = ball_points[before_idx].local_dt + (
@@ -646,7 +652,7 @@ def load_league_throws(
                 accel=float("nan"),
                 direction=try_float(row.get("release_direction_solved", row.get("release_direction", ""))),
             )
-            ball_points = [synthetic_por, *ball_points[first_projectile_idx:projectile_end_idx + 1]]
+            ball_points = [synthetic_por, *ball_points[first_projectile_idx:continuation_end_idx + 1]]
             por_idx = 0
             # Fractional League-frame coordinates preserve the half-frame first
             # interval: normally 0, 0.5, 1.5, 2.5, ... at 20 Hz.

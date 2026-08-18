@@ -90,3 +90,44 @@ def test_sparse_league_phase_and_dense_mocap_phase_align_through_none_columns() 
     assert mocap_features["disp_x_t25ms"] == 0.5
     assert mocap_features["disp_x_t50ms"] == 1.0
     assert mocap_features["disp_x_t75ms"] == 1.5
+
+
+def test_raw_league_continuation_keeps_bounce_until_goal_crossing() -> None:
+    trajectory = [
+        {"t_local": "2024-01-01T12:00:00.000", "ts_ms": 0, "x": 13.0, "y": 0.0, "z": 1.3},
+        {"t_local": "2024-01-01T12:00:00.050", "ts_ms": 50, "x": 14.0, "y": 0.0, "z": 0.8},
+        {"t_local": "2024-01-01T12:00:00.100", "ts_ms": 100, "x": 16.0, "y": 0.0, "z": 0.25},
+        {"t_local": "2024-01-01T12:00:00.150", "ts_ms": 150, "x": 18.0, "y": 0.0, "z": 0.095},
+        {"t_local": "2024-01-01T12:00:00.200", "ts_ms": 200, "x": 19.0, "y": 0.0, "z": 0.3},
+        {"t_local": "2024-01-01T12:00:00.250", "ts_ms": 250, "x": 20.2, "y": 0.0, "z": 0.6},
+        {"t_local": "2024-01-01T12:00:00.300", "ts_ms": 300, "x": 20.8, "y": 0.0, "z": 0.9},
+    ]
+    row = {
+        "id": "bounce-to-goal",
+        "release_point_json": json.dumps({
+            "t_local": "2024-01-01T12:00:00.025", "ts_ms": 25,
+            "x": 13.5, "y": 0.0, "z": 1.05,
+        }),
+        "trajectory_json": json.dumps(trajectory),
+        "first_projectile_idx": "1",
+        # The release detector's clean projectile interval ends before bounce.
+        "projectile_end_idx": "2",
+        "release_speed_solved": "20.0",
+        "release_direction_solved": "0.0",
+    }
+    with tempfile.TemporaryDirectory() as temp_dir:
+        csv_path = Path(temp_dir) / "league.csv"
+        with csv_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(row), delimiter=";")
+            writer.writeheader()
+            writer.writerow(row)
+        representations, _ = load_league_throws(
+            Path("unused"), Path("unused"), precomputed_csv=csv_path,
+        )
+
+    assert len(representations) == 1
+    points = json.loads(representations[0].trajectory_json)
+    assert len(points) == 6  # synthetic PoR + samples through x=20.2
+    assert math.isclose(points[-1]["x"], 20.2 - 13.5)
+    assert [round(point["z"], 3) for point in points[2:5]] == [-0.8, -0.955, -0.75]
+    assert all(point["x"] <= 20.2 - 13.5 + 1e-9 for point in points)
