@@ -12,15 +12,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Mapping, Sequence
 
 import numpy as np
 import pandas as pd
 
-
+# Use these as the default weights
 DEFAULT_GROUP_WEIGHTS: dict[str, float] = {
     "release_speed": 3.0,
     "release_angles": 3.0,
@@ -30,6 +32,24 @@ DEFAULT_GROUP_WEIGHTS: dict[str, float] = {
     "trajectory_angles": 2.0,
     "acceleration": 0.25,
     "absolute_por": 0.25,
+}
+
+GROUP_WEIGHTS_HEIGHT_FOCUS: dict[str, float] = {
+    "release_speed": 3.0,
+    "release_height": 3.0,
+    "relative_trajectory": 3.0,
+    "velocity_evolution": 2.0,
+    "release_angles": 2.0,
+    "trajectory_angles": 2.0,
+    "absolute_por": 0.75,
+    "acceleration": 0.25,
+}
+
+# Add new named configurations here. They automatically become valid
+# --weight-preset choices and are included, with values, in --help.
+PREDEFINED_WEIGHT_SETS: dict[str, dict[str, float]] = {
+    "default": DEFAULT_GROUP_WEIGHTS,
+    "height_focus": GROUP_WEIGHTS_HEIGHT_FOCUS,
 }
 
 ANGLE_GROUPS = {"release_angles", "trajectory_angles"}
@@ -228,20 +248,149 @@ def _parse_weights(value: str | None) -> dict[str, float] | None:
     return {str(k): float(v) for k, v in parsed.items()}
 
 
+def infer_throw_types(mocap: pd.DataFrame) -> dict[str, str]:
+    """Map Mocap IDs to types, preferring an explicit throw_type column."""
+    id_column = next((c for c in ID_CANDIDATES if c in mocap.columns), None)
+    if id_column is None:
+        raise ValueError(f"Mocap input needs one of these ID columns: {ID_CANDIDATES}")
+    mapping: dict[str, str] = {}
+    for _, row in mocap.iterrows():
+        throw_id = str(row[id_column])
+        explicit = row.get("throw_type")
+        if explicit is not None and pd.notna(explicit) and str(explicit).strip():
+            throw_type = str(explicit).strip()
+        else:
+            match = re.match(r"^(.*?)(?:_seg\d+)$", throw_id, flags=re.IGNORECASE)
+            throw_type = match.group(1) if match else "unknown"
+        mapping[throw_id] = throw_type
+    return mapping
+
+
+def balanced_top1_score(
+    matches: pd.DataFrame, mocap: pd.DataFrame,
+) -> tuple[float, float, pd.DataFrame]:
+    """Return equal-per-type mean top-1 distance and its monotonic score.
+
+    Each throw type contributes equally regardless of how many recorded
+    segments it contains. Lower balanced distance and higher score are better.
+    """
+    top1 = matches[matches["rank"] == 1].copy()
+    type_by_id = infer_throw_types(mocap)
+    top1["throw_type"] = top1["mocap_throw_id"].astype(str).map(type_by_id).fillna("unknown")
+    top1["total_distance"] = pd.to_numeric(top1["total_distance"], errors="coerce")
+    finite = top1[np.isfinite(top1["total_distance"])].copy()
+    if finite.empty:
+        raise ValueError("No finite rank-1 distances are available for scoring")
+    by_type = (finite.groupby("throw_type", as_index=False)["total_distance"]
+               .agg(mean_top1_distance="mean", throw_count="size"))
+    balanced_distance = float(by_type["mean_top1_distance"].mean())
+    score = 1.0 / (1.0 + balanced_distance)
+    return balanced_distance, score, by_type
+
+
+def random_group_weights(rng: np.random.Generator) -> dict[str, float]:
+    """Draw positive group budgets with the same total as the defaults."""
+    names = list(DEFAULT_GROUP_WEIGHTS)
+    values = rng.dirichlet(np.ones(len(names))) * sum(DEFAULT_GROUP_WEIGHTS.values())
+    return dict(zip(names, map(float, values)))
+
+
+def _unique_search_directory(base: Path) -> Path:
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    candidate = base / f"weighted_knn_random_{stamp}"
+    candidate.mkdir(parents=True, exist_ok=False)
+    return candidate
+
+
+def run_random_weight_search(
+    mocap: pd.DataFrame, league: pd.DataFrame, *, runs: int, k: int,
+    output_base: Path, seed: int | None = None,
+) -> tuple[Path, pd.DataFrame, dict[str, float]]:
+    """Run randomized retrievals and persist all results plus the best model."""
+    if runs < 1:
+        raise ValueError("runs must be at least 1")
+    search_dir = _unique_search_directory(output_base)
+    rng = np.random.default_rng(seed)
+    summary_rows: list[dict[str, object]] = []
+    best_distance = math.inf
+    best_weights: dict[str, float] | None = None
+    best_matches: pd.DataFrame | None = None
+
+    for run_number in range(1, runs + 1):
+        weights = random_group_weights(rng)
+        matches = WeightedKNNRetriever(weights).fit(league).retrieve(mocap, k=k)
+        distance, score, by_type = balanced_top1_score(matches, mocap)
+        run_dir = search_dir / f"run_{run_number:04d}"
+        run_dir.mkdir()
+        matches.to_csv(run_dir / "weighted_knn_matches.csv", index=False)
+        by_type.to_csv(run_dir / "metrics_by_throw_type.csv", index=False)
+        (run_dir / "weights.json").write_text(json.dumps(weights, indent=2) + "\n", encoding="utf-8")
+        summary_rows.append({
+            "run": run_number, "balanced_mean_top1_distance": distance,
+            "balanced_score": score, "weights_json": json.dumps(weights, sort_keys=True), **weights,
+        })
+        if distance < best_distance:
+            best_distance, best_weights, best_matches = distance, weights, matches
+
+    summary = pd.DataFrame(summary_rows).sort_values(
+        ["balanced_mean_top1_distance", "run"], kind="stable"
+    )
+    summary.to_csv(search_dir / "random_search_summary.csv", index=False)
+    assert best_weights is not None and best_matches is not None
+    (search_dir / "best_weights.json").write_text(
+        json.dumps({"balanced_mean_top1_distance": best_distance,
+                    "balanced_score": 1.0 / (1.0 + best_distance),
+                    "weights": best_weights}, indent=2) + "\n", encoding="utf-8"
+    )
+    best_matches.to_csv(search_dir / "best_weighted_knn_matches.csv", index=False)
+    return search_dir, summary, best_weights
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    preset_help = "\n".join(
+        f"  {name}: {json.dumps(weights, sort_keys=True)}"
+        for name, weights in PREDEFINED_WEIGHT_SETS.items()
+    )
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=f"Predefined weight sets:\n{preset_help}",
+    )
     base = Path(__file__).resolve().parents[2] / "out"
     parser.add_argument("--mocap", type=Path, default=base / "features_mocap.csv")
     parser.add_argument("--league", type=Path, default=base / "features_league.csv")
     parser.add_argument("--output", type=Path, default=base / "weighted_knn_matches.csv")
     parser.add_argument("-k", type=int, default=5)
-    parser.add_argument("--weights", help="JSON object or path to a JSON file")
+    weights_group = parser.add_mutually_exclusive_group()
+    weights_group.add_argument(
+        "--weight-preset", choices=tuple(PREDEFINED_WEIGHT_SETS), default="default",
+        help="named predefined weight set (default: default; full values shown below)",
+    )
+    weights_group.add_argument("--weights", help="custom JSON object or path to a JSON file")
+    parser.add_argument(
+        "--random-weight-runs", type=int, default=0, metavar="N",
+        help="run N randomized weight configurations and save all runs in a new folder under out/",
+    )
+    parser.add_argument("--random-seed", type=int, help="seed for reproducible randomized weights")
     args = parser.parse_args()
 
-    retriever = WeightedKNNRetriever(_parse_weights(args.weights))
-    results = retriever.fit(read_feature_csv(args.league)).retrieve(
-        read_feature_csv(args.mocap), k=args.k
-    )
+    mocap = read_feature_csv(args.mocap)
+    league = read_feature_csv(args.league)
+    if args.random_weight_runs:
+        search_dir, summary, best_weights = run_random_weight_search(
+            mocap, league, runs=args.random_weight_runs, k=args.k,
+            output_base=base, seed=args.random_seed,
+        )
+        best = summary.iloc[0]
+        print(f"Wrote {args.random_weight_runs} randomized runs to {search_dir}")
+        print(f"Best balanced mean top-1 distance: {best['balanced_mean_top1_distance']:.8g}")
+        print(f"Best balanced score: {best['balanced_score']:.8g}")
+        print(f"Best weights: {json.dumps(best_weights, sort_keys=True)}")
+        return 0
+
+    selected_weights = (_parse_weights(args.weights) if args.weights is not None
+                        else PREDEFINED_WEIGHT_SETS[args.weight_preset])
+    retriever = WeightedKNNRetriever(selected_weights)
+    results = retriever.fit(league).retrieve(mocap, k=args.k)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     results.to_csv(args.output, index=False)
     print(f"Wrote {len(results)} matches to {args.output}")

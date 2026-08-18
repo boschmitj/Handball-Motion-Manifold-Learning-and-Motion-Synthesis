@@ -19,11 +19,16 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import numpy as np
+import pandas as pd
 from scipy.interpolate import PchipInterpolator
 from scipy.optimize import least_squares
 
 
 XYZ = ("x", "y", "z")
+WEIGHT_GROUP_NAMES = (
+    "release_speed", "release_angles", "release_height", "relative_trajectory",
+    "velocity_evolution", "trajectory_angles", "acceleration", "absolute_por",
+)
 
 
 @dataclass(frozen=True)
@@ -527,11 +532,13 @@ def reconstruct_league_continuation(
 def reconstruct_matches(
     matches_csv: str | Path, raw_league_csv: str | Path, raw_mocap_csv: str | Path,
     output_csv: str | Path, *, target_hz: float = 300.0, rank: int = 1, ground_z: float = 0.095,
+    weight_run_id: int | None = None, weight_set: Mapping[str, float] | None = None,
 ) -> int:
     matches, _ = _read_csv(Path(matches_csv))
     output_path = Path(output_csv)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = ["mocap_throw_id", "league_throw_id", "target_sampling_rate_hz",
+    fieldnames = ["mocap_throw_id", "league_throw_id", "weight_run_id", "weights_json",
+                  "target_sampling_rate_hz",
                   "translation_x_m", "translation_y_m", "translation_z_m",
                   "bounce_detected", "bounce_time_ms", "bounce_x_m", "bounce_y_m", "bounce_z_m",
                   "bounce_vertical_fit_rmse", "bounce_vz_in_m_s", "bounce_vz_out_m_s",
@@ -554,6 +561,8 @@ def reconstruct_matches(
             writer.writerow({
                 "mocap_throw_id": match["mocap_throw_id"],
                 "league_throw_id": match["league_throw_id"],
+                "weight_run_id": "" if weight_run_id is None else weight_run_id,
+                "weights_json": "" if weight_set is None else json.dumps(weight_set, sort_keys=True),
                 "target_sampling_rate_hz": target_hz,
                 "translation_x_m": offset[0], "translation_y_m": offset[1], "translation_z_m": offset[2],
                 "bounce_detected": bounce_point is not None,
@@ -573,22 +582,145 @@ def reconstruct_matches(
     return count
 
 
+def resolve_random_weight_run(search_dir: str | Path, run_id: int) -> tuple[Path, dict[str, float]]:
+    """Resolve one random-search run's matches and exact saved weights."""
+    if run_id < 1:
+        raise ValueError("random run ID must be at least 1")
+    run_dir = Path(search_dir) / f"run_{run_id:04d}"
+    matches = run_dir / "weighted_knn_matches.csv"
+    weights_path = run_dir / "weights.json"
+    if not matches.is_file():
+        raise FileNotFoundError(f"Random-search match file not found: {matches}")
+    if not weights_path.is_file():
+        raise FileNotFoundError(f"Random-search weights file not found: {weights_path}")
+    parsed = json.loads(weights_path.read_text(encoding="utf-8"))
+    if not isinstance(parsed, dict):
+        raise ValueError(f"Expected a weight dictionary in {weights_path}")
+    return matches, {str(key): float(value) for key, value in parsed.items()}
+
+
+def output_path_for_run(path: str | Path, run_id: int) -> Path:
+    """Add a stable run_XXXX suffix without duplicating an existing suffix."""
+    output = Path(path)
+    suffix = f"_run_{run_id:04d}"
+    stem = output.stem if output.stem.endswith(suffix) else output.stem + suffix
+    return output.with_name(stem + output.suffix)
+
+
+def select_random_weight_run(
+    search_dir: str | Path, weight_groups: Sequence[str], *, top_runs: int = 20,
+) -> tuple[int, float, float]:
+    """Select the most jointly important requested weights among top runs.
+
+    Top runs are determined by ascending balanced mean top-1 distance. Within
+    that shortlist, the geometric mean rewards configurations where every
+    requested group has a high weight. Returns run ID, selection value, and
+    balanced distance.
+    """
+    if top_runs < 1:
+        raise ValueError("top_runs must be at least 1")
+    groups = list(dict.fromkeys(weight_groups))
+    if not groups:
+        raise ValueError("at least one weight group must be selected")
+    unknown = set(groups) - set(WEIGHT_GROUP_NAMES)
+    if unknown:
+        raise ValueError(
+            f"Unknown weight groups {sorted(unknown)}; available: {list(WEIGHT_GROUP_NAMES)}"
+        )
+    summary_path = Path(search_dir) / "random_search_summary.csv"
+    if not summary_path.is_file():
+        raise FileNotFoundError(f"Random-search summary not found: {summary_path}")
+    summary = pd.read_csv(summary_path)
+    required = {"run", "balanced_mean_top1_distance", *groups}
+    missing = required - set(summary.columns)
+    if missing:
+        raise ValueError(f"Random-search summary is missing columns: {sorted(missing)}")
+    summary["balanced_mean_top1_distance"] = pd.to_numeric(
+        summary["balanced_mean_top1_distance"], errors="coerce"
+    )
+    for group in groups:
+        summary[group] = pd.to_numeric(summary[group], errors="coerce")
+    valid = summary.dropna(subset=["run", "balanced_mean_top1_distance", *groups]).copy()
+    valid = valid[np.isfinite(valid["balanced_mean_top1_distance"])]
+    valid = valid[(valid[groups] >= 0).all(axis=1)]
+    if valid.empty:
+        raise ValueError("No valid random-search rows remain for automatic run selection")
+    shortlist = valid.sort_values(
+        ["balanced_mean_top1_distance", "run"], kind="stable"
+    ).head(top_runs).copy()
+    values = shortlist[groups].to_numpy(dtype=float)
+    shortlist["selected_weight_geometric_mean"] = np.prod(values, axis=1) ** (1.0 / len(groups))
+    chosen = shortlist.sort_values(
+        ["selected_weight_geometric_mean", "balanced_mean_top1_distance", "run"],
+        ascending=[False, True, True], kind="stable",
+    ).iloc[0]
+    return (int(chosen["run"]), float(chosen["selected_weight_geometric_mean"]),
+            float(chosen["balanced_mean_top1_distance"]))
+
+
 def main() -> int:
     base = Path(__file__).resolve().parents[1] / "out"
     throw_features = base / "throw_features"
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--matches", type=Path, default=base / "weighted_knn_matches.csv")
-    parser.add_argument("--raw-league", type=Path, default=throw_features / "raw_league.csv")
-    parser.add_argument("--raw-mocap", type=Path, default=throw_features / "raw_mocap.csv")
+    parser.add_argument(
+        "--random-search-dir", type=Path,
+        help="weighted_knn_random_* directory containing saved run_XXXX folders",
+    )
+    run_selection = parser.add_mutually_exclusive_group()
+    run_selection.add_argument(
+        "--random-run-id", type=int,
+        help="use weighted_knn_matches.csv and weights.json from this random-search run",
+    )
+    run_selection.add_argument(
+        "--select-weight-groups", nargs="+", metavar="GROUP",
+        help="among the top runs, select the run with the highest joint importance of these weights",
+    )
+    parser.add_argument(
+        "--top-runs", type=int, default=20, metavar="N",
+        help="number of lowest-distance runs considered by --select-weight-groups (default: 20)",
+    )
+    parser.add_argument("--raw-league", type=Path, default=base / "raw_files" / "raw_league.csv")
+    parser.add_argument("--raw-mocap", type=Path, default=base / "raw_files" / "raw_mocap.csv")
     parser.add_argument("--output", type=Path, default=base / "reconstructed_matched_trajectories.csv")
     parser.add_argument("--target-hz", type=float, default=300.0)
     parser.add_argument("--rank", type=int, default=1)
     parser.add_argument("--ground-z", type=float, default=0.095,
                         help="ball-centre height at ground contact in metres (default: 0.095)")
     args = parser.parse_args()
-    count = reconstruct_matches(args.matches, args.raw_league, args.raw_mocap, args.output,
-                                target_hz=args.target_hz, rank=args.rank, ground_z=args.ground_z)
-    print(f"Wrote {count} reconstructed trajectories to {args.output}")
+    wants_random_run = args.random_run_id is not None or args.select_weight_groups is not None
+    if wants_random_run and args.random_search_dir is None:
+        parser.error("--random-search-dir is required with random run selection")
+    if args.random_search_dir is not None and not wants_random_run:
+        parser.error("--random-search-dir requires --random-run-id or --select-weight-groups")
+    if args.top_runs < 1:
+        parser.error("--top-runs must be at least 1")
+    matches = args.matches
+    output = args.output
+    weights = None
+    if args.select_weight_groups is not None:
+        try:
+            selected_run, importance, distance = select_random_weight_run(
+                args.random_search_dir, args.select_weight_groups, top_runs=args.top_runs,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            parser.error(str(exc))
+        args.random_run_id = selected_run
+        print(f"Selected run {selected_run:04d} from the {args.top_runs} lowest-distance runs")
+        print(f"Weight groups: {', '.join(args.select_weight_groups)}")
+        print(f"Joint weight geometric mean: {importance:.8g}")
+        print(f"Balanced mean top-1 distance: {distance:.8g}")
+    if args.random_run_id is not None:
+        matches, weights = resolve_random_weight_run(args.random_search_dir, args.random_run_id)
+        output = output_path_for_run(output, args.random_run_id)
+        print(f"Using random-search run {args.random_run_id:04d}: {matches}")
+        print(f"Weights: {json.dumps(weights, sort_keys=True)}")
+    count = reconstruct_matches(
+        matches, args.raw_league, args.raw_mocap, output, target_hz=args.target_hz,
+        rank=args.rank, ground_z=args.ground_z, weight_run_id=args.random_run_id,
+        weight_set=weights,
+    )
+    print(f"Wrote {count} reconstructed trajectories to {output}")
     return 0
 
 

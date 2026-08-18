@@ -7,13 +7,15 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 from trajectory_reconstruction import (  # noqa: E402
     BounceWindow, align_trajectory_to_por, detect_bounce_window, estimate_bounce_time,
     insert_bounce_event, load_raw_throw, parse_trajectory_json, reconstruct_league_continuation,
-    reconstruct_matches, upsample_at_times, upsample_trajectory,
+    reconstruct_matches, resolve_random_weight_run, output_path_for_run,
+    select_random_weight_run, upsample_at_times, upsample_trajectory,
 )
 
 
@@ -135,3 +137,41 @@ def test_semicolon_csv_with_large_json_field_is_read_completely(tmp_path: Path) 
     row = load_raw_throw(path, "9082364")
     assert row["throw_id"] == "9082364"
     assert len(json.loads(row["trajectory_json"])) == 2500
+
+
+def test_random_weight_run_resolution_and_output_suffix(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run_0007"
+    run_dir.mkdir()
+    matches = run_dir / "weighted_knn_matches.csv"
+    matches.write_text("mocap_throw_id,rank,league_throw_id\nM1,1,L1\n", encoding="utf-8")
+    weights = {"release_speed": 2.5, "release_angles": 1.5}
+    (run_dir / "weights.json").write_text(json.dumps(weights), encoding="utf-8")
+    resolved_matches, resolved_weights = resolve_random_weight_run(tmp_path, 7)
+    assert resolved_matches == matches
+    assert resolved_weights == weights
+    assert output_path_for_run(Path("out/reconstructed.csv"), 7) == Path(
+        "out/reconstructed_run_0007.csv"
+    )
+    assert output_path_for_run(Path("out/reconstructed_run_0007.csv"), 7) == Path(
+        "out/reconstructed_run_0007.csv"
+    )
+
+
+def test_selects_joint_weight_importance_only_within_top_distance_runs(tmp_path: Path) -> None:
+    rows = [
+        {"run": 1, "balanced_mean_top1_distance": 1.0, "release_speed": 5.0, "release_angles": 1.0},
+        {"run": 2, "balanced_mean_top1_distance": 1.1, "release_speed": 3.0, "release_angles": 3.0},
+        {"run": 3, "balanced_mean_top1_distance": 1.2, "release_speed": 1.0, "release_angles": 5.0},
+        {"run": 4, "balanced_mean_top1_distance": 99.0, "release_speed": 20.0, "release_angles": 20.0},
+    ]
+    pd.DataFrame(rows).to_csv(tmp_path / "random_search_summary.csv", index=False)
+    run, importance, distance = select_random_weight_run(
+        tmp_path, ["release_speed"], top_runs=3,
+    )
+    assert (run, importance, distance) == (1, 5.0, 1.0)
+    run, importance, distance = select_random_weight_run(
+        tmp_path, ["release_speed", "release_angles"], top_runs=3,
+    )
+    assert run == 2
+    assert math.isclose(importance, 3.0)
+    assert distance == 1.1

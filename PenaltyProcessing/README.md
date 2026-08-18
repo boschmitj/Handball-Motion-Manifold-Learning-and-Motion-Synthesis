@@ -112,6 +112,33 @@ does not rotate, scale, smooth, velocity-correct, or warp the selected throw.
 Output kinematics are derived from the reconstructed positions and never feed
 back into them.
 
+To reconstruct matches from a particular randomized weighted-kNN run:
+
+```bash
+python3 src/trajectory_reconstruction.py \
+  --random-search-dir out/weighted_knn_random_20260818_143012_123456 \
+  --random-run-id 7
+```
+
+This reads `run_0007/weighted_knn_matches.csv` and `run_0007/weights.json` and
+writes `out/reconstructed_matched_trajectories_run_0007.csv`. The selected run
+ID and complete weight dictionary are also stored in the output CSV.
+
+Alternatively, select a run automatically from the 20 runs with the smallest
+balanced mean top-1 distance:
+
+```bash
+python3 src/trajectory_reconstruction.py \
+  --random-search-dir out/weighted_knn_random_20260818_143012_123456 \
+  --select-weight-groups release_speed release_angles \
+  --top-runs 20
+```
+
+For one group, this chooses its largest weight in the shortlist. For multiple
+groups, it maximizes their geometric mean, favouring runs where every selected
+group has substantial importance. The output filename receives the selected
+`run_XXXX` suffix automatically.
+
 ### 3. Check available options
 
 ```bash
