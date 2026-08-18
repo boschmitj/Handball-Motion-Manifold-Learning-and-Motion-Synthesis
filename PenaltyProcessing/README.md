@@ -21,6 +21,9 @@ metrics, and an issues file for unresolved rows.
 - `src/ball_trajectory.py` - trajectory parsing and heuristics
 - `src/fixture_resolution.py` - fixture lookup and run-folder creation
 - `src/penalty_time_utils.py` - time parsing and name normalization helpers
+- `src/trajectory_reconstruction.py` - geometry-preserving reconstruction of
+  selected League continuations
+- `visualization/plot_reconstructed_match.py` - 3D reconstruction diagnostic
 
 ## Inputs
 
@@ -89,6 +92,25 @@ python3 shot_matcher.py
 
 Both forms are equivalent. The repo-root form is safer because all default paths
 are written relative to the project root.
+
+### Reconstruct selected kNN matches
+
+After producing the raw representations and kNN results, reconstruct every
+rank-1 match at 300 Hz:
+
+```bash
+python3 src/trajectory_reconstruction.py \
+  --matches out/weighted_knn_matches.csv \
+  --raw-league out/throw_features/raw_league.csv \
+  --raw-mocap out/throw_features/raw_mocap.csv \
+  --output out/reconstructed_matched_trajectories.csv \
+  --target-hz 300
+```
+
+This stage applies one constant translation to every measured League point. It
+does not rotate, scale, smooth, velocity-correct, or warp the selected throw.
+Output kinematics are derived from the reconstructed positions and never feed
+back into them.
 
 ### 3. Check available options
 
