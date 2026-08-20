@@ -966,19 +966,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--skeleton",
         type=Path,
-        default=root / "mocap_files" / "skeleton" / "Mo_Wurfvariation4_ul0251_reprocessing_labeling_done_s_Josh.tsv",
+        default=root / "mocap_files" / "throw_ul" / "skeleton" / "Mo_Wurfvariation4_ul0251_reprocessing_labeling_done_s_Josh.tsv",
         help="Skeleton TSV with segment points",
     )
     parser.add_argument(
         "--ball-3d",
         type=Path,
-        default=root / "mocap_files" / "6DOF" / "Mo_Wurfvariation4_ul0251_reprocessing_6DOF_3D.tsv",
+        default=root / "mocap_files" / "throw_ul" / "6DOF" / "Mo_Wurfvariation4_ul0251_reprocessing_6DOF_3D.tsv",
         help="Ball 3D marker TSV (for computed sphere centre)",
     )
     parser.add_argument(
         "--ball-6d",
         type=Path,
-        default=root / "mocap_files" / "6DOF" / "Mo_Wurfvariation4_ul0251_reprocessing_labeling_done_6D.tsv",
+        default=root / "mocap_files" / "throw_ul" /"6DOF" / "Mo_Wurfvariation4_ul0251_reprocessing_labeling_done_6D.tsv",
         help="Ball 6D TSV (for GT centre)",
     )
     parser.add_argument(

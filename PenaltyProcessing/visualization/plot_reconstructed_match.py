@@ -34,8 +34,8 @@ def main() -> int:
     throw_features = base / "throw_features"
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--reconstructed", type=Path, default=base / "reconstructed_matched_trajectories.csv")
-    parser.add_argument("--raw-league", type=Path, default=base / "raw_files" / "raw_league.csv")
-    parser.add_argument("--raw-mocap", type=Path, default=base / "raw_files" / "raw_mocap.csv")
+    parser.add_argument("--raw-league", type=Path, default=throw_features / "raw_league.csv")
+    parser.add_argument("--raw-mocap", type=Path, default=throw_features / "raw_mocap.csv")
     parser.add_argument("--mocap-throw-id", required=True)
     parser.add_argument("--league-throw-id", required=True)
     parser.add_argument("--output", type=Path)

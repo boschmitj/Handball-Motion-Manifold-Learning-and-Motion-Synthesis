@@ -12,7 +12,8 @@ import pandas as pd
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 from trajectory_reconstruction import (  # noqa: E402
-    BounceWindow, align_trajectory_to_por, detect_bounce_window, estimate_bounce_time,
+    BounceWindow, align_bounce_trajectory_to_por, align_trajectory_to_por,
+    detect_bounce_window, estimate_bounce_time,
     insert_bounce_event, load_raw_throw, parse_trajectory_json, reconstruct_league_continuation,
     reconstruct_matches, resolve_random_weight_run, output_path_for_run,
     select_random_weight_run, upsample_at_times, upsample_trajectory,
@@ -80,6 +81,61 @@ def test_bounce_is_guarded_inserted_and_piecewise_preserved() -> None:
                                [[p[a] for a in ("x", "y", "z")] for p in exact_points])
     assert contact["bounce_reconstruction_rmse_m"] >= 0
     assert contact["bounce_reconstruction_max_error_m"] >= 0
+
+
+def test_bounce_alignment_fades_z_correction_and_keeps_floor_after_contact() -> None:
+    points = [
+        {**_point(0, 10, 1, 1.5), "is_original_sample": True},
+        {**_point(50, 11, 1, 0.7), "is_original_sample": False},
+        {**_point(100, 12, 1, 0.095), "is_original_sample": False, "event": "bounce"},
+        {**_point(150, 13, 1, 0.5), "is_original_sample": False},
+    ]
+    aligned = align_bounce_trajectory_to_por(points, (20, -2, 2.0))
+    np.testing.assert_allclose([aligned[0][a] for a in ("x", "y", "z")], [20, -2, 2.0])
+    assert math.isclose(aligned[1]["z"], 0.95)  # smootherstep(0.5) == 0.5
+    assert math.isclose(aligned[2]["z"], 0.095)
+    assert math.isclose(aligned[3]["z"], 0.5)
+    np.testing.assert_allclose(
+        [[q["x"] - p["x"], q["y"] - p["y"]] for p, q in zip(points, aligned)],
+        [[10, -3]] * 4,
+    )
+
+
+def test_bounce_at_goal_line_with_only_two_outgoing_samples_is_detected() -> None:
+    """A late bounce must not require samples beyond the goal-line crossing."""
+    points = parse_trajectory_json(json.dumps([
+        _point(0, 0.0, 0, 1.720),
+        _point(25, 0.380, 0, 1.604),
+        _point(75, 1.643, 0, 1.121),
+        _point(125, 3.141, 0, 0.602),
+        _point(175, 4.224, 0, 0.165),
+        _point(225, 5.080, 0, 0.079),
+        _point(275, 5.810, 0, 0.169),
+        _point(325, 6.540, 0, 0.328),
+    ]))
+    window = detect_bounce_window(points)
+    assert window == BounceWindow(minimum_idx=5, start_idx=3, end_idx=7)
+    event = estimate_bounce_time(points, window)
+    assert 225 < event.time_ms < 275
+    assert event.vz_in_m_s < 0 < event.vz_out_m_s
+
+
+def test_bounce_uses_window_change_when_adjacent_incoming_sample_is_near_ground() -> None:
+    """Regression for League throw 10169014: 0.115 -> 0.099 is only 16 mm."""
+    points = parse_trajectory_json(json.dumps([
+        _point(0, 0.0, 0, 1.446),
+        _point(25, 0.249, 0, 1.236),
+        _point(75, 1.313, 0, 0.818),
+        _point(125, 2.827, 0, 0.326),
+        _point(175, 4.053, 0, 0.115),
+        _point(225, 4.858, 0, 0.099),
+        _point(275, 5.494, 0, 0.154),
+        _point(325, 6.057, 0, 0.470),
+        _point(375, 6.513, 0, 1.017),
+        _point(425, 6.933, 0, 1.528),
+    ]))
+    window = detect_bounce_window(points)
+    assert window == BounceWindow(minimum_idx=5, start_idx=3, end_idx=7)
 
 
 def test_high_noisy_minimum_is_not_a_bounce() -> None:

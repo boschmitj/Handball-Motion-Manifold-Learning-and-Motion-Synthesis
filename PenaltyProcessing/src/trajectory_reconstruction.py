@@ -140,11 +140,56 @@ def align_trajectory_to_por(
     return aligned
 
 
+def align_bounce_trajectory_to_por(
+    points: Sequence[Mapping[str, Any]], mocap_por: Sequence[float]
+) -> list[dict[str, Any]]:
+    """Align x/y constantly while fading the initial z correction to contact."""
+    if not points:
+        raise ValueError("points must not be empty")
+    bounce = next((p for p in points if p.get("event") == "bounce"), None)
+    if bounce is None:
+        raise ValueError("bounce-aware alignment requires a synthetic bounce point")
+    target = np.asarray(mocap_por, dtype=float)
+    if target.shape != (3,) or not np.all(np.isfinite(target)):
+        raise ValueError("mocap_por must contain three finite coordinates")
+    start = np.asarray([points[0][axis] for axis in XYZ], dtype=float)
+    dx, dy, dz = target - start
+    start_time = float(points[0]["t_since_ms"])
+    bounce_time = float(bounce["t_since_ms"])
+    if bounce_time <= start_time:
+        raise ValueError("bounce time must be after the PoR time")
+
+    aligned: list[dict[str, Any]] = []
+    for source in points:
+        point = deepcopy(dict(source))
+        time_ms = float(source["t_since_ms"])
+        if time_ms < bounce_time:
+            s = min(1.0, max(0.0, (time_ms - start_time) / (bounce_time - start_time)))
+            smootherstep = 6.0 * s**5 - 15.0 * s**4 + 10.0 * s**3
+            z_correction = float(dz) * (1.0 - smootherstep)
+        else:
+            z_correction = 0.0
+        point.update({
+            "x": float(source["x"]) + float(dx),
+            "y": float(source["y"]) + float(dy),
+            "z": float(source["z"]) + z_correction,
+        })
+        aligned.append(point)
+    return aligned
+
+
 def detect_bounce_window(
     points: Sequence[Mapping[str, Any]], *, min_vertical_change_m: float = 0.03,
     samples_per_side: int = 2,
 ) -> BounceWindow | None:
-    """Find a local z minimum and return non-overlapping fitting samples."""
+    """Find a local z minimum and return non-overlapping fitting samples.
+
+    The minimum itself only needs to be lower than its immediate neighbours.
+    The minimum vertical change is evaluated over the complete fitting window:
+    at 20 Hz the sample immediately before contact can already be close to the
+    ground, so requiring a large change in that single 50 ms interval misses
+    otherwise unambiguous bounces.
+    """
     if samples_per_side < 2:
         raise ValueError("samples_per_side must be at least 2")
     if len(points) < 4:
@@ -152,7 +197,12 @@ def detect_bounce_window(
     candidates: list[tuple[float, int]] = []
     for i in range(1, len(points) - 1):
         prev_z, z, next_z = (float(points[j]["z"]) for j in (i - 1, i, i + 1))
-        descent, ascent = prev_z - z, next_z - z
+        if not (prev_z > z < next_z):
+            continue
+        start = max(0, i - samples_per_side)
+        end = min(len(points) - 1, i + samples_per_side)
+        descent = max(float(points[j]["z"]) for j in range(start, i)) - z
+        ascent = max(float(points[j]["z"]) for j in range(i + 1, end + 1)) - z
         if descent >= min_vertical_change_m and ascent >= min_vertical_change_m:
             candidates.append((z, i))
     if not candidates:
@@ -495,6 +545,32 @@ def validate_reconstruction(
     assert math.isclose(float(original[-1]["t_since_ms"]), float(control_points[-1]["t_since_ms"]), abs_tol=atol)
 
 
+def validate_bounce_alignment(
+    original: Sequence[Mapping[str, Any]], aligned: Sequence[Mapping[str, Any]],
+    mocap_por: Sequence[float], ground_z: float, *, atol: float = 1e-6,
+) -> None:
+    """Validate PoR retargeting without moving the floor or post-bounce path."""
+    if len(original) != len(aligned):
+        raise AssertionError("bounce alignment must preserve the number of samples")
+    original_times = np.asarray([p["t_since_ms"] for p in original], dtype=float)
+    aligned_times = np.asarray([p["t_since_ms"] for p in aligned], dtype=float)
+    np.testing.assert_allclose(aligned_times, original_times, atol=atol, rtol=0)
+    np.testing.assert_allclose([aligned[0][a] for a in XYZ], mocap_por, atol=atol, rtol=0)
+
+    original_xyz = np.asarray([[p[a] for a in XYZ] for p in original], dtype=float)
+    aligned_xyz = np.asarray([[p[a] for a in XYZ] for p in aligned], dtype=float)
+    offsets = aligned_xyz - original_xyz
+    np.testing.assert_allclose(offsets[:, :2], np.repeat(offsets[:1, :2], len(offsets), axis=0),
+                               atol=atol, rtol=0)
+    bounce_index = next((i for i, p in enumerate(original) if p.get("event") == "bounce"), None)
+    if bounce_index is None:
+        raise AssertionError("bounce-aware alignment lost the bounce event")
+    assert math.isclose(float(aligned[bounce_index]["z"]), ground_z, abs_tol=atol)
+    assert math.isclose(float(offsets[0, 2]), float(mocap_por[2]) - original_xyz[0, 2], abs_tol=atol)
+    assert math.isclose(float(offsets[bounce_index, 2]), 0.0, abs_tol=atol)
+    np.testing.assert_allclose(offsets[bounce_index:, 2], 0.0, atol=atol, rtol=0)
+
+
 def upsample_at_times(points: Sequence[Mapping[str, Any]], times_ms: Sequence[float]) -> list[dict[str, float]]:
     """Evaluate the same piecewise interpolant at caller-provided timestamps."""
     times = np.asarray(times_ms, dtype=float)
@@ -518,10 +594,15 @@ def reconstruct_league_continuation(
     window = detect_bounce_window(original_absolute)
     event = estimate_bounce_time(original_absolute, window, ground_z=ground_z) if window else None
     controls_absolute = insert_bounce_event(original_absolute, event) if event else original_absolute
-    aligned_original = align_trajectory_to_por(original_absolute, mocap_por)
-    aligned_controls = align_trajectory_to_por(controls_absolute, mocap_por)
-    validate_reconstruction(original_absolute, aligned_original, aligned_controls, mocap_por)
-    upsampled = upsample_trajectory(aligned_controls, target_hz)
+    if event is not None:
+        upsampled_absolute = upsample_trajectory(controls_absolute, target_hz)
+        upsampled = align_bounce_trajectory_to_por(upsampled_absolute, mocap_por)
+        validate_bounce_alignment(upsampled_absolute, upsampled, mocap_por, ground_z)
+    else:
+        aligned_original = align_trajectory_to_por(original_absolute, mocap_por)
+        aligned_controls = align_trajectory_to_por(controls_absolute, mocap_por)
+        validate_reconstruction(original_absolute, aligned_original, aligned_controls, mocap_por)
+        upsampled = upsample_trajectory(aligned_controls, target_hz)
     validate_bounce_reconstruction(upsampled)
     reconstructed = recompute_kinematics(upsampled)
     assert math.isclose(reconstructed[0]["t_since_ms"], original_relative[0]["t_since_ms"], abs_tol=1e-9)
@@ -539,7 +620,7 @@ def reconstruct_matches(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = ["mocap_throw_id", "league_throw_id", "weight_run_id", "weights_json",
                   "target_sampling_rate_hz",
-                  "translation_x_m", "translation_y_m", "translation_z_m",
+                  "translation_x_m", "translation_y_m", "translation_z_m", "z_alignment_mode",
                   "bounce_detected", "bounce_time_ms", "bounce_x_m", "bounce_y_m", "bounce_z_m",
                   "bounce_vertical_fit_rmse", "bounce_vz_in_m_s", "bounce_vz_out_m_s",
                   "bounce_reconstruction_rmse_m", "bounce_reconstruction_max_error_m",
@@ -565,6 +646,7 @@ def reconstruct_matches(
                 "weights_json": "" if weight_set is None else json.dumps(weight_set, sort_keys=True),
                 "target_sampling_rate_hz": target_hz,
                 "translation_x_m": offset[0], "translation_y_m": offset[1], "translation_z_m": offset[2],
+                "z_alignment_mode": "fade_to_ground" if bounce_point is not None else "constant",
                 "bounce_detected": bounce_point is not None,
                 "bounce_time_ms": "" if bounce_point is None else bounce_point["t_since_ms"],
                 "bounce_x_m": "" if bounce_point is None else bounce_point["x"],
@@ -680,8 +762,8 @@ def main() -> int:
         "--top-runs", type=int, default=20, metavar="N",
         help="number of lowest-distance runs considered by --select-weight-groups (default: 20)",
     )
-    parser.add_argument("--raw-league", type=Path, default=base / "raw_files" / "raw_league.csv")
-    parser.add_argument("--raw-mocap", type=Path, default=base / "raw_files" / "raw_mocap.csv")
+    parser.add_argument("--raw-league", type=Path, default=throw_features / "raw_league.csv")
+    parser.add_argument("--raw-mocap", type=Path, default=throw_features / "raw_mocap.csv")
     parser.add_argument("--output", type=Path, default=base / "reconstructed_matched_trajectories.csv")
     parser.add_argument("--target-hz", type=float, default=300.0)
     parser.add_argument("--rank", type=int, default=1)
