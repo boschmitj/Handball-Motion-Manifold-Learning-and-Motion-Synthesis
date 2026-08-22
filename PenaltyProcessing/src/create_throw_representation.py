@@ -118,6 +118,7 @@ from fixture_resolution import build_fixture_index, resolve_fixture_file, build_
 from penalty_time_utils import parse_penalty_local_time, parse_position_local_time, try_float, try_int
 from release_detector_trajectory_based import (
     compute_velocity_acceleration_from_points,
+    find_bounce_idx,
     _rotate_180_z,
     _is_left_side,
 )
@@ -158,6 +159,8 @@ class ThrowRepresentation:
     # Native sampling rate of the source (300.0 for Mocap, 20.0 for League),
     # needed to downsample Mocap frames to the League rate later.
     sampling_rate_hz: float = 0.0
+    is_bounce: Optional[bool] = None
+    bounce_index_in_trajectory: Optional[int] = None
     release_timing_type: str = "native"
     first_projectile_offset_ms: Optional[float] = None
     # Full-throw info (for throw_index.csv)
@@ -654,6 +657,7 @@ def load_league_throws(
             )
             ball_points = [synthetic_por, *ball_points[first_projectile_idx:continuation_end_idx + 1]]
             por_idx = 0
+            bounce_idx = find_bounce_idx(ball_points, por_idx, len(ball_points) - 1)
             # Fractional League-frame coordinates preserve the half-frame first
             # interval: normally 0, 0.5, 1.5, 2.5, ... at 20 Hz.
             league_frames = [
@@ -729,6 +733,8 @@ def load_league_throws(
                 trajectory_point_count=len(rel_points),
                 trajectory_duration_ms=float(duration_ms),
                 sampling_rate_hz=LEAGUE_SAMPLING_RATE_HZ,
+                is_bounce=bounce_idx is not None,
+                bounce_index_in_trajectory=bounce_idx,
                 release_timing_type=(
                     "half_frame_adjacent" if len(t_since) > 1 and 15.0 <= t_since[1] <= 35.0
                     else "half_frame_shifted" if len(t_since) > 1 and 65.0 <= t_since[1] <= 85.0
@@ -786,6 +792,8 @@ def load_league_throws_from_csv(csv_path: Path) -> List[ThrowRepresentation]:
                 trajectory_point_count=try_int(row.get("trajectory_point_count", "0")) or 0,
                 trajectory_duration_ms=try_float(row.get("trajectory_duration_ms", "0")) or 0.0,
                 sampling_rate_hz=try_float(row.get("sampling_rate_hz", "20.0")) or LEAGUE_SAMPLING_RATE_HZ,
+                is_bounce=_parse_optional_bool(row.get("is_bounce")),
+                bounce_index_in_trajectory=try_int(row.get("bounce_index_in_trajectory", "")),
                 release_timing_type=row.get("release_timing_type", "native") or "native",
                 first_projectile_offset_ms=try_float(row.get("first_projectile_offset_ms", "")),
                 valid=(row.get("valid", "True").strip().lower() == "true"),
@@ -798,6 +806,18 @@ def load_league_throws_from_csv(csv_path: Path) -> List[ThrowRepresentation]:
 
     logger.info("Loaded %d League throws from %s", len(representations), csv_path)
     return representations
+
+
+def _parse_optional_bool(value: Any) -> Optional[bool]:
+    """Parse CSV booleans while preserving a genuinely missing value."""
+    if value is None or pd.isna(value):
+        return None
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes"}:
+        return True
+    if normalized in {"0", "false", "no"}:
+        return False
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1125,6 +1145,9 @@ def process_mocap_recording(
 
         # Full trajectory (whole throw, not PoR-relative)
         full_traj_ser = serialize_trajectory(all_ball_points) if all_ball_points else "[]"
+        bounce_idx = find_bounce_idx(
+            all_ball_points, por_idx_in_points, len(all_ball_points) - 1,
+        )
 
         # Determine global indices
         # segment_start_global_idx: index in the full shared_frames list
@@ -1155,6 +1178,8 @@ def process_mocap_recording(
             trajectory_point_count=len(rel_points),
             trajectory_duration_ms=float(duration_ms),
             sampling_rate_hz=MOCAP_SAMPLING_RATE_HZ,
+            is_bounce=bounce_idx is not None,
+            bounce_index_in_trajectory=bounce_idx,
             release_timing_type="dense_native",
             first_projectile_offset_ms=(t_since[por_idx_in_points + 1] if por_idx_in_points + 1 < len(t_since) else None),
             full_trajectory_json=full_traj_ser,
@@ -1205,6 +1230,7 @@ def write_raw_mocap_csv(representations: List[ThrowRepresentation], output_path:
         "release_speed_m_s", "release_direction_deg", "release_height_m",
         "trajectory_json",
         "trajectory_point_count", "trajectory_duration_ms", "sampling_rate_hz",
+        "is_bounce", "bounce_index_in_trajectory",
         "release_timing_type", "first_projectile_offset_ms",
         "valid", "error",
     ]
@@ -1228,6 +1254,8 @@ def write_raw_mocap_csv(representations: List[ThrowRepresentation], output_path:
                 "trajectory_point_count": rep.trajectory_point_count,
                 "trajectory_duration_ms": rep.trajectory_duration_ms,
                 "sampling_rate_hz": rep.sampling_rate_hz,
+                "is_bounce": "" if rep.is_bounce is None else int(rep.is_bounce),
+                "bounce_index_in_trajectory": rep.bounce_index_in_trajectory,
                 "release_timing_type": rep.release_timing_type,
                 "first_projectile_offset_ms": rep.first_projectile_offset_ms,
                 "valid": rep.valid,
@@ -1245,6 +1273,7 @@ def write_raw_league_csv(representations: List[ThrowRepresentation], output_path
         "release_speed_m_s", "release_direction_deg", "release_height_m",
         "trajectory_json",
         "trajectory_point_count", "trajectory_duration_ms", "sampling_rate_hz",
+        "is_bounce", "bounce_index_in_trajectory",
         "release_timing_type", "first_projectile_offset_ms",
         "valid", "error",
     ]
@@ -1268,6 +1297,8 @@ def write_raw_league_csv(representations: List[ThrowRepresentation], output_path
                 "trajectory_point_count": rep.trajectory_point_count,
                 "trajectory_duration_ms": rep.trajectory_duration_ms,
                 "sampling_rate_hz": rep.sampling_rate_hz,
+                "is_bounce": "" if rep.is_bounce is None else int(rep.is_bounce),
+                "bounce_index_in_trajectory": rep.bounce_index_in_trajectory,
                 "release_timing_type": rep.release_timing_type,
                 "first_projectile_offset_ms": rep.first_projectile_offset_ms,
                 "valid": rep.valid,
@@ -1296,6 +1327,8 @@ def write_throw_index_csv(representations: List[ThrowRepresentation], output_pat
         "release_speed_m_s",
         "release_direction_deg",
         "release_height_m",
+        "is_bounce",
+        "bounce_index_in_trajectory",
         "trajectory_point_count_full",
         "trajectory_duration_ms_full",
         "valid", "error",
@@ -1318,6 +1351,8 @@ def write_throw_index_csv(representations: List[ThrowRepresentation], output_pat
                 "release_speed_m_s": rep.release_speed_m_s,
                 "release_direction_deg": rep.release_direction_deg,
                 "release_height_m": rep.release_height_m,
+                "is_bounce": "" if rep.is_bounce is None else int(rep.is_bounce),
+                "bounce_index_in_trajectory": rep.bounce_index_in_trajectory,
                 "trajectory_point_count_full": rep.full_trajectory_point_count or 0,
                 "trajectory_duration_ms_full": rep.trajectory_duration_ms,
                 "valid": rep.valid,

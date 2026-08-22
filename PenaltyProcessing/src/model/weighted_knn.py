@@ -397,7 +397,7 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"Predefined weight sets:\n{preset_help}",
     )
-    base = Path(__file__).resolve().parents[2] / "out"
+    base = Path(__file__).resolve().parents[2] / "out" / "throw_features"
     parser.add_argument("--mocap", type=Path, default=base / "features_mocap.csv")
     parser.add_argument("--league", type=Path, default=base / "features_league.csv")
     parser.add_argument("--output", type=Path, default=base / "weighted_knn_matches.csv")

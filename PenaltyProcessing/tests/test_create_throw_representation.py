@@ -126,7 +126,10 @@ def test_raw_league_continuation_keeps_bounce_until_goal_crossing() -> None:
         )
 
     assert len(representations) == 1
-    points = json.loads(representations[0].trajectory_json)
+    representation = representations[0]
+    assert representation.is_bounce is True
+    assert representation.bounce_index_in_trajectory == 3
+    points = json.loads(representation.trajectory_json)
     assert len(points) == 6  # synthetic PoR + samples through x=20.2
     assert math.isclose(points[-1]["x"], 20.2 - 13.5)
     assert [round(point["z"], 3) for point in points[2:5]] == [-0.8, -0.955, -0.75]

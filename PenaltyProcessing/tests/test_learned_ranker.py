@@ -1,11 +1,12 @@
 import unittest
+import json
 
 import numpy as np
 import pandas as pd
 
 from src.model.weighted_knn import WeightedKNNRetriever
 from src.ranking.build_ranking_dataset import (
-    BASE_COMPONENTS, add_interactions, build_synthetic_splits,
+    BASE_COMPONENTS, add_interactions, build_synthetic_splits, perturb_raw_throw,
 )
 from src.ranking.linear_pairwise_ranker import LinearPairwiseRanker
 
@@ -39,11 +40,51 @@ class LearnedRankerTests(unittest.TestCase):
     def test_synthetic_splits_do_not_leak_sources(self):
         league = pd.DataFrame({"throw_id": [f"l{i}" for i in range(20)],
                                "release_speed_m_s": np.arange(20.0)})
-        splits = build_synthetic_splits(league, augmentations=2, seed=4)
+        raw = pd.DataFrame([
+            {
+                "throw_id": f"l{i}", "source": "league", "sampling_rate_hz": 20.0,
+                "por_x_m": 13.0, "por_y_m": 0.0, "por_z_m": 1.5,
+                "release_height_m": 1.5, "is_bounce": 0,
+                "trajectory_json": json.dumps([
+                    {"frame": j, "t_since_ms": j * 50.0,
+                     "x": i + j, "y": j * .1, "z": -j * .05}
+                    for j in range(4)
+                ]),
+            }
+            for i in range(20)
+        ])
+        splits = build_synthetic_splits(league, raw, augmentations=2, seed=4)
         source_sets = [set(split.source_ids) for split in splits.values()]
         self.assertFalse(source_sets[0] & source_sets[1])
         self.assertFalse(source_sets[0] & source_sets[2])
         self.assertFalse(source_sets[1] & source_sets[2])
+
+    def test_synthetic_kinematics_are_recomputed_from_perturbed_positions(self):
+        raw = pd.Series({
+            "throw_id": "l1", "source": "league", "sampling_rate_hz": 20.0,
+            "por_x_m": 13.0, "por_y_m": 0.0, "por_z_m": 1.5,
+            "release_height_m": 1.5, "is_bounce": 0,
+            "trajectory_json": json.dumps([
+                {"frame": j, "t_since_ms": j * 50.0,
+                 "x": j, "y": j * .1, "z": -j * .05,
+                 "v": 999.0, "vx": 999.0, "vy": 999.0, "vz": 999.0,
+                 "a": 999.0, "dir": 999.0, "vert_angle": 999.0}
+                for j in range(5)
+            ]),
+        })
+        perturbed = perturb_raw_throw(raw, np.random.default_rng(7))
+        points = json.loads(perturbed["trajectory_json"])
+        first, second = points[:2]
+        dt = (second["t_since_ms"] - first["t_since_ms"]) / 1000.0
+        expected_velocity = np.asarray([
+            (second[axis] - first[axis]) / dt for axis in "xyz"
+        ])
+        np.testing.assert_allclose(
+            [first["vx"], first["vy"], first["vz"]], expected_velocity,
+        )
+        self.assertAlmostEqual(first["v"], float(np.linalg.norm(expected_velocity)))
+        self.assertNotEqual(first["v"], 999.0)
+        self.assertNotEqual(first["a"], 999.0)
 
     def test_bounce_interactions_are_zero_for_non_bounce(self):
         base = np.ones((2, len(BASE_COMPONENTS)))
