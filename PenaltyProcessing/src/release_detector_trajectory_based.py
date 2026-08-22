@@ -442,6 +442,47 @@ def _nearby_interval_statistics(points: Sequence[BallPoint]) -> Tuple[Optional[f
     )
 
 
+def _has_vertical_turn_in_release_zone(
+    points: Sequence[BallPoint],
+    start_idx: int,
+    end_idx: int,
+    *,
+    goal_x: float = 20.0,
+    min_goal_distance: float = 6.0,
+    max_goal_distance: float = 7.5,
+    noise_velocity_m_s: float = 0.35,
+    noise_displacement_m: float = 0.025,
+) -> bool:
+    """Detect a meaningful reversal of vertical motion near release.
+
+    The backward projectile search can otherwise absorb hand-carried samples
+    when x/y are linear and z happens to look parabolic.  Only intervals whose
+    endpoints lie in the configured release-distance band are considered.
+    Tiny z changes are ignored, both in metres and metres/second, so tracking
+    jitter cannot create a false turn.
+    """
+    lo = max(0, start_idx)
+    hi = min(end_idx, len(points) - 1)
+    previous_direction = 0
+    for first, second in zip(points[lo:hi], points[lo + 1:hi + 1]):
+        first_distance = goal_x - abs(first.x)
+        second_distance = goal_x - abs(second.x)
+        if not (
+            min_goal_distance <= first_distance <= max_goal_distance
+            and min_goal_distance <= second_distance <= max_goal_distance
+        ):
+            continue
+        dt = (second.local_dt - first.local_dt).total_seconds()
+        dz = second.z - first.z
+        if dt <= 0.0 or abs(dz) <= noise_displacement_m or abs(dz / dt) <= noise_velocity_m_s:
+            continue
+        direction = 1 if dz > 0.0 else -1
+        if previous_direction and direction != previous_direction:
+            return True
+        previous_direction = direction
+    return False
+
+
 def _evaluate_projectile_candidate(
     point: BallPoint,
     next_point: BallPoint,
@@ -496,7 +537,18 @@ def _evaluate_projectile_candidate(
     }
 
 
-def detect_backward_projectile_segment(points: Sequence[BallPoint], start_idx: int, end_idx: int) -> Optional[Dict[str, Any]]:
+def detect_backward_projectile_segment(
+    points: Sequence[BallPoint],
+    start_idx: int,
+    end_idx: int,
+    *,
+    reject_vertical_turn_near_release: bool = True,
+    release_zone_goal_x: float = 20.0,
+    release_zone_min_goal_distance: float = 6.0,
+    release_zone_max_goal_distance: float = 7.5,
+    vertical_noise_velocity_m_s: float = 0.35,
+    vertical_noise_displacement_m: float = 0.025,
+) -> Optional[Dict[str, Any]]:
     """Fit the clean trajectory tail and grow the projectile segment backward."""
     if len(points) < 6:
         return None
@@ -533,6 +585,22 @@ def detect_backward_projectile_segment(points: Sequence[BallPoint], start_idx: i
         diagnostics = _evaluate_projectile_candidate(
             points[idx], points[idx + 1], anchor_points, anchor_model, tolerances,
         )
+        vertical_turn = reject_vertical_turn_near_release and _has_vertical_turn_in_release_zone(
+            points,
+            idx,
+            seed_start,
+            goal_x=release_zone_goal_x,
+            min_goal_distance=release_zone_min_goal_distance,
+            max_goal_distance=release_zone_max_goal_distance,
+            noise_velocity_m_s=vertical_noise_velocity_m_s,
+            noise_displacement_m=vertical_noise_displacement_m,
+        )
+        diagnostics["vertical_turn_near_release"] = vertical_turn
+        if vertical_turn:
+            # This is physical boundary evidence rather than an isolated bad
+            # measurement: stop before hand motion can enter the flight segment.
+            diagnostics["compatible"] = False
+            diagnostics["extreme"] = True
         if diagnostics["compatible"]:
             # Treat a single intervening failure as measurement noise. The
             # fixed anchor remains unchanged, so it cannot contaminate later tests.
