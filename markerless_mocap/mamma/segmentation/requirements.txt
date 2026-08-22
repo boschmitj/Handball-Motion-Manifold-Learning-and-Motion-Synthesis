@@ -1,0 +1,15 @@
+# Core dependencies
+loguru
+sam2
+einops
+pycocotools
+ultralytics
+open_clip_torch
+scikit-learn
+seaborn
+pyyaml
+imageio-ffmpeg
+
+# Optional: SAM3 backend (requires setuptools<81 and HuggingFace login)
+# pip install "setuptools<81"
+# pip install git+https://github.com/facebookresearch/sam3.git

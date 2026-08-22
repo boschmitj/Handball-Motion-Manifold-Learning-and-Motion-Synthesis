@@ -1,0 +1,77 @@
+{
+  "capture_root": "../../../data/mamma_eval_extra",
+  "calib": "../calib/070525_BedlamLab.yaml",
+  "cam_fps": 30,
+  "sequences": {
+    "000": {
+      "name": "070525_BedlamLab_Eval_Solo_Dancing_00202_1"
+    },
+    "001": {
+      "name": "070525_BedlamLab_Eval_Solo_Dancing_00219_1"
+    },
+    "002": {
+      "name": "070525_BedlamLab_Eval_Solo_Dancing_00236_1"
+    },
+    "003": {
+      "name": "070525_BedlamLab_Eval_Subject_Calib_00202_1"
+    },
+    "004": {
+      "name": "070525_BedlamLab_Eval_Subject_Calib_00219_1"
+    },
+    "005": {
+      "name": "070525_BedlamLab_Eval_Subject_Calib_00236_2_1"
+    },
+    "006": {
+      "name": "070525_BedlamLab_Eval_Walking_00202_1"
+    },
+    "007": {
+      "name": "070525_BedlamLab_Eval_Walking_00219_1"
+    },
+    "008": {
+      "name": "070525_BedlamLab_Eval_Walking_00236_1"
+    },
+    "009": {
+      "name": "070525_BedlamLab_Eval_WarmUp_00202_1"
+    },
+    "010": {
+      "name": "070525_BedlamLab_Eval_WarmUp_00219_1"
+    },
+    "011": {
+      "name": "070525_BedlamLab_Eval_WarmUp_00236_1"
+    }
+  },
+  "cams": [
+    "IOI_01",
+    "IOI_02",
+    "IOI_03",
+    "IOI_04",
+    "IOI_05",
+    "IOI_06",
+    "IOI_07",
+    "IOI_08",
+    "IOI_09",
+    "IOI_10",
+    "IOI_11",
+    "IOI_12",
+    "IOI_13",
+    "IOI_14",
+    "IOI_15",
+    "IOI_16",
+    "IOI_17",
+    "IOI_18",
+    "IOI_19",
+    "IOI_20",
+    "IOI_21",
+    "IOI_22",
+    "IOI_23",
+    "IOI_24",
+    "IOI_25",
+    "IOI_26",
+    "IOI_27",
+    "IOI_28",
+    "IOI_29",
+    "IOI_30",
+    "IOI_31",
+    "IOI_32"
+  ]
+}

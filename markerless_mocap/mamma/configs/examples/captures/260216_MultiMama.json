@@ -1,0 +1,143 @@
+{
+  "capture_root": "../../../data/mamma_markerless_multiple_people",
+  "calib": "../calib/260216_MultiMama.yaml",
+  "cam_fps": 30,
+  "sequences": {
+    "000": {
+      "name": "260216_MultiMama_3_accidental_bump_000111_1"
+    },
+    "001": {
+      "name": "260216_MultiMama_3_assist_walk_101100_1"
+    },
+    "002": {
+      "name": "260216_MultiMama_3_conga_line_100110_1"
+    },
+    "003": {
+      "name": "260216_MultiMama_3_dance_hands_circle_101100_1"
+    },
+    "004": {
+      "name": "260216_MultiMama_3_dance_shoulders_circle_001011_1"
+    },
+    "005": {
+      "name": "260216_MultiMama_3_group_hug_101010_1"
+    },
+    "006": {
+      "name": "260216_MultiMama_3_hands_stack_huddle_110001_1"
+    },
+    "007": {
+      "name": "260216_MultiMama_3_pass_clap_001101_1"
+    },
+    "008": {
+      "name": "260216_MultiMama_3_social_circle_001110_1"
+    },
+    "009": {
+      "name": "260216_MultiMama_3_telephone_chain_101001_1"
+    },
+    "010": {
+      "name": "260216_MultiMama_3_twister_easy_01_001101_1"
+    },
+    "011": {
+      "name": "260216_MultiMama_4_accidental_bump_011110_1"
+    },
+    "012": {
+      "name": "260216_MultiMama_4_conga_line_011101_1"
+    },
+    "013": {
+      "name": "260216_MultiMama_4_dance_hands_circle_010111_1"
+    },
+    "014": {
+      "name": "260216_MultiMama_4_dance_shoulders_circle_110110_1"
+    },
+    "015": {
+      "name": "260216_MultiMama_4_hands_stack_huddle_011110_1"
+    },
+    "016": {
+      "name": "260216_MultiMama_4_pass_clap_111010_1"
+    },
+    "017": {
+      "name": "260216_MultiMama_4_social_circle_111100_1"
+    },
+    "018": {
+      "name": "260216_MultiMama_4_telephone_chain_010111_1"
+    },
+    "019": {
+      "name": "260216_MultiMama_4_twister_easy_001111_1"
+    },
+    "020": {
+      "name": "260216_MultiMama_5_conga_line_111101_1"
+    },
+    "021": {
+      "name": "260216_MultiMama_5_dance_hands_circle_111110_1"
+    },
+    "022": {
+      "name": "260216_MultiMama_5_dance_shoulders_circle_111110_1"
+    },
+    "023": {
+      "name": "260216_MultiMama_5_group_hug_111110_1"
+    },
+    "024": {
+      "name": "260216_MultiMama_5_group_photo_111110_1"
+    },
+    "025": {
+      "name": "260216_MultiMama_5_hands_stack_huddle_111110_1"
+    },
+    "026": {
+      "name": "260216_MultiMama_5_pass_clap_111110_1"
+    },
+    "027": {
+      "name": "260216_MultiMama_5_social_circle_111110_1"
+    },
+    "028": {
+      "name": "260216_MultiMama_5_telephone_chain_111110_1"
+    },
+    "029": {
+      "name": "260216_MultiMama_6_dance_hands_circle_111111_1"
+    },
+    "030": {
+      "name": "260216_MultiMama_6_dance_shoulders_circle_111111_1"
+    },
+    "031": {
+      "name": "260216_MultiMama_6_pass_clap_111111_1"
+    },
+    "032": {
+      "name": "260216_MultiMama_6_social_circle_111111_1"
+    },
+    "033": {
+      "name": "260216_MultiMama_6_telephone_chain_111111_1"
+    }
+  },
+  "cams": [
+    "IOI_01",
+    "IOI_02",
+    "IOI_03",
+    "IOI_04",
+    "IOI_05",
+    "IOI_06",
+    "IOI_07",
+    "IOI_08",
+    "IOI_09",
+    "IOI_10",
+    "IOI_11",
+    "IOI_12",
+    "IOI_13",
+    "IOI_14",
+    "IOI_15",
+    "IOI_16",
+    "IOI_17",
+    "IOI_18",
+    "IOI_19",
+    "IOI_20",
+    "IOI_21",
+    "IOI_22",
+    "IOI_23",
+    "IOI_24",
+    "IOI_25",
+    "IOI_26",
+    "IOI_27",
+    "IOI_28",
+    "IOI_29",
+    "IOI_30",
+    "IOI_31",
+    "IOI_32"
+  ]
+}

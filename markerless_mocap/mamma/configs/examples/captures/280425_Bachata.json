@@ -1,0 +1,110 @@
+{
+  "capture_root": "../../../data/mamma_markerless_dance",
+  "calib": "../calib/280425_Bachata.yaml",
+  "cam_fps": 30,
+  "sequences": {
+    "000": {
+      "name": "280425_Bachata_ArmsLengthSideTouchTurn_03679_03680_1"
+    },
+    "001": {
+      "name": "280425_Bachata_CirclePalms_03679_03680_1"
+    },
+    "002": {
+      "name": "280425_Bachata_HeadRoll_03679_03680_1"
+    },
+    "003": {
+      "name": "280425_Bachata_HipBump_03679_03680_1"
+    },
+    "004": {
+      "name": "280425_Bachata_Improv_1_03679_03680_1"
+    },
+    "005": {
+      "name": "280425_Bachata_Improv_2_03679_03680_1"
+    },
+    "006": {
+      "name": "280425_Bachata_Improv_3_03679_03680_1"
+    },
+    "007": {
+      "name": "280425_Bachata_Improv_4_03679_03680_1_1"
+    },
+    "008": {
+      "name": "280425_Bachata_Improv_4_03679_03680_1_2"
+    },
+    "009": {
+      "name": "280425_Bachata_Improv_5_03679_03680_1"
+    },
+    "010": {
+      "name": "280425_Bachata_LeanOnLongSide_03679_03680_1"
+    },
+    "011": {
+      "name": "280425_Bachata_LeanOnLongSide_03679_03680_1_1"
+    },
+    "012": {
+      "name": "280425_Bachata_ParallelSideSteps_03679_03680_1"
+    },
+    "013": {
+      "name": "280425_Bachata_ParallelSideSteps_03679_03680_1_1"
+    },
+    "014": {
+      "name": "280425_Bachata_ParallelSideSteps_03679_03680_2_1"
+    },
+    "015": {
+      "name": "280425_Bachata_ParallelSideTurn_03679_03680_1"
+    },
+    "016": {
+      "name": "280425_Bachata_ThrowUpCrossedArm_03679_03680_1"
+    },
+    "017": {
+      "name": "280425_Bachata_WaistCut_03679_03680_1"
+    },
+    "018": {
+      "name": "280425_Bachata_WaistCut_03679_03680_1_1"
+    },
+    "019": {
+      "name": "280425_Bachata_WalkZigZag_03679_03680_1"
+    },
+    "020": {
+      "name": "280425_Bachata_WalkZigZag_03679_03680_1_1"
+    },
+    "021": {
+      "name": "280425_Bachata_WalkZigZag_03679_03680_2_1"
+    },
+    "022": {
+      "name": "280425_Bachata_shoulderTangle_03679_03680_1"
+    }
+  },
+  "cams": [
+    "IOI_01",
+    "IOI_02",
+    "IOI_03",
+    "IOI_04",
+    "IOI_05",
+    "IOI_06",
+    "IOI_07",
+    "IOI_08",
+    "IOI_09",
+    "IOI_10",
+    "IOI_11",
+    "IOI_12",
+    "IOI_13",
+    "IOI_14",
+    "IOI_15",
+    "IOI_16",
+    "IOI_17",
+    "IOI_18",
+    "IOI_19",
+    "IOI_20",
+    "IOI_21",
+    "IOI_22",
+    "IOI_23",
+    "IOI_24",
+    "IOI_25",
+    "IOI_26",
+    "IOI_27",
+    "IOI_28",
+    "IOI_29",
+    "IOI_30",
+    "IOI_31",
+    "IOI_32"
+  ]
+}

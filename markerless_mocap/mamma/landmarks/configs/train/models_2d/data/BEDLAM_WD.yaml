@@ -1,0 +1,133 @@
+bedlam_weight: 1.0
+multiview_weight: 1.0
+interaction_weight: 1.0
+hand_weight: 1.0
+
+name: bedlam
+
+train:
+    type: BEDLAM_WD
+    task: landmark_2d
+    datasets:
+        BEDLAM_WD:
+            hand_weight: 1.0
+            weights: ${mult:1.0, ${data.bedlam_weight}}
+            label_path: "${dataset_path}/BEDLAM_MASKS_WD"
+        # BEDLAM_MULTIVIEW_00:
+        #     hand_weight: 1.0
+        #     weights: ${mult:1.0, ${data.multiview_weight}}
+        #     label_path: "${dataset_path}/b1_all_2-6_C_200_00"
+        # BEDLAM_MULTIVIEW_01:
+        #     hand_weight: 1.0
+        #     weights: ${mult:1.0, ${data.multiview_weight}}
+        #     label_path: "${dataset_path}/b1_all_2-6_C_200_01"
+        # MOYO_00:
+        #     hand_weight: 1.0
+        #     weights: ${mult:1.0, ${data.multiview_weight}}
+        #     label_path: "${dataset_path}/moyo_4-6_C_200_00"
+        # HARMONY4D_00:
+        #     hand_weight: 0.01
+        #     weights: ${mult:1.0, ${data.interaction_weight}}
+        #     label_path: "${dataset_path}/harmony4d_train_1_NC_200_00_contact"
+        # HI4D_00:
+        #     hand_weight: 0.4
+        #     weights: ${mult:1.0, ${data.interaction_weight}}
+        #     label_path: "${dataset_path}/hi4d_1_NC_200_00_contact"
+        # HI4D_01:
+        #     hand_weight: 0.4
+        #     weights: ${mult:1.0, ${data.interaction_weight}}
+        #     label_path: "${dataset_path}/hi4d_1_NC_200_01_contact"
+        # INTER_COUPLE_00:
+        #     hand_weight: 1.0
+        #     weights: ${mult:1.0, ${data.interaction_weight}}
+        #     label_path: "${dataset_path}/interactions_couple_1_C_200_00_contact"
+        # INTER_COUPLE_01:
+        #     hand_weight: 1.0
+        #     weights: ${mult:1.0, ${data.interaction_weight}}
+        #     label_path: "${dataset_path}/interactions_couple_close_1_C_200_00_contact"
+        # INTER_X_00:
+        #     hand_weight: 0.8
+        #     weights: ${mult:1.0, ${data.interaction_weight}}
+        #     label_path: "${dataset_path}/inter-x_train_close_1_NC_200_00_contact"
+        # INTER_X_01:
+        #     hand_weight: 0.8
+        #     weights: ${mult:1.0, ${data.interaction_weight}}
+        #     label_path: "${dataset_path}/inter-x_train_close_1_NC_200_01_contact"
+        # INTER_X_02:
+        #     hand_weight: 0.8
+        #     weights: ${mult:1.0, ${data.interaction_weight}}
+        #     label_path: "${dataset_path}/inter-x_train_close_1_NC_200_02_contact"
+        # LATIN_DANCE_00:
+        #     hand_weight: 0.8
+        #     weights: ${mult:1.0, ${data.interaction_weight}}
+        #     label_path: "${dataset_path}/latindance10_1_NC_entire_dataset_00_contact"
+        # LATIN_DANCE_01:
+        #     hand_weight: 0.8
+        #     weights: ${mult:1.0, ${data.interaction_weight}}
+        #     label_path: "${dataset_path}/latindance10_1_NC_entire_dataset_01_contact"
+        # LATIN_DANCE_02:
+        #     hand_weight: 0.8
+        #     weights: ${mult:1.0, ${data.interaction_weight}}
+        #     label_path: "${dataset_path}/latindance10_1_NC_entire_dataset_02_contact"
+        # SIGN_00:
+        #     hand_weight: 1.2
+        #     weights: ${mult:1.0, ${data.hand_weight}}
+        #     label_path: "${dataset_path}/sign_avatars_4-6_NC_200_00"
+        # INTERHAND_00:
+        #     hand_weight: 1.2
+        #     weights: ${mult:1.0, ${data.hand_weight}}
+        #     label_path: "${dataset_path}/interhand_2-6_NC_200_00"
+        # INTERHAND_01:
+        #     hand_weight: 1.2
+        #     weights: ${mult:1.0, ${data.hand_weight}}
+        #     label_path: "${dataset_path}/interhand_2-6_NC_200_01"
+
+
+    normalize_plus_min_one: true
+    is_train: true
+    data_cfg: ${data_cfg}
+    # pipeline: ${train_pipeline}
+    image_width: ${image_size[0]}
+    image_height: ${image_size[1]}
+    scale_factor: 0.3
+    trans_factor: 0.02
+    flip_prob: 0.0
+    rotate_prob: 0.6
+    trans_prob: 0.5
+    rotation_factor: 30
+    half_body_prob: 0.0
+    use_different_joints_weight: true
+    extreme_cropping_prob: 0.2
+    img_aug_prob: 0.9
+    heatmap_sigma: 2
+    soft_nms: false
+    num_joints: ${num_joints}
+
+
+val:
+    type: BEDLAM_WD
+    task: landmark_2d
+    datasets:
+        BEDLAM_WD:
+            hand_weight: 1.0
+            weights: 1.0
+            label_path: "${dataset_path}/BEDLAM_MASKS_WD"
+    normalize_plus_min_one: true
+    is_train: false
+    data_cfg: ${data_cfg}
+    # pipeline: ${val_pipeline}
+    image_width: ${image_size[0]}
+    image_height: ${image_size[1]}
+    scale_factor: 0.3
+    trans_factor: 0.02
+    flip_prob: 0.0
+    rotate_prob: 0.6
+    trans_prob: 0.5
+    rotation_factor: 30
+    half_body_prob: 0.0
+    use_different_joints_weight: true
+    extreme_cropping_prob: 0.2
+    img_aug_prob: 0.9
+    heatmap_sigma: 2
+    soft_nms: false
+    num_joints: ${num_joints}

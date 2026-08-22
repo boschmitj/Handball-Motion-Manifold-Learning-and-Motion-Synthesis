@@ -1,0 +1,222 @@
+# SAM2 configuration — recommended for most use cases.
+#
+# SAM2 tracks each object independently, supports multi-frame anchor prompts,
+# and is robust on dense multi-person scenes.
+#
+# Usage:
+#   python run_ma_masks.py --sam_version sam2 --assignment_cfg configs/sam2.yaml ...
+
+# ─── Scene ────────────────────────────────────────────────────────────────────
+
+scene:
+  # Fixed number of people in the scene. null = auto-detect from YOLO on the
+  # init frame. Set explicitly if YOLO misses people or over-detects.
+  expected_subjects: null
+
+  # Whether to look at other cameras before processing them, to build a richer
+  # per-person CLIP feature bank. Improves cross-camera ID matching accuracy
+  # at the cost of extra YOLO+CLIP inference on the init frame of each camera.
+  bootstrap_multiview_bank: true
+
+# ─── Matching ─────────────────────────────────────────────────────────────────
+# Controls how people are detected and matched across cameras and frames.
+
+matching:
+  # Skip the first N frames for all detection and matching operations:
+  # - Init frame selection (auto-select scans from this frame onward)
+  # - Cross-camera YOLO+CLIP matching (samples start from this frame)
+  # - SAM3 prompt "person" detection (candidates start from this frame)
+  # Early frames are often dark (lights off) or show people still entering
+  # the scene. Skipped frames still receive masks via backward propagation.
+  start_frame: 10
+
+  # Sample every Nth frame for cross-camera matching (YOLO+CLIP). Auto-scales
+  # with sequence length. Lower = more thorough but slower. At 30fps video,
+  # 50 means roughly one sample every 1.7 seconds.
+  sample_interval: 50
+
+  # Minimum number of sampled frames regardless of sequence length. Prevents
+  # very short sequences from having too few detection candidates.
+  min_samples: 5
+
+  # YOLO person detection confidence threshold. Lower catches more people
+  # (useful for occlusion/unusual poses) but may produce false positives.
+  # The CLIP matching downstream filters out most false positives.
+  yolo_person_conf: 0.5
+
+  # Post-detection deduplication: if two YOLO boxes for the same frame overlap
+  # by more than yolo_dedup_iou, the lower-confidence one is dropped. Prevents
+  # SAM from receiving two prompts for the same person.
+  yolo_dedup_enable: true
+  yolo_dedup_iou: 0.75
+
+  # Frame offsets (relative to init frame) used during multi-view bootstrapping.
+  # [0] means only the init frame is used. [0, 5, -5] would also check 5 frames
+  # before/after. More offsets = better matching but slower bootstrap.
+  bootstrap_frame_offsets: [0]
+
+  # Minimum CLIP similarity score for a detection to be accepted during
+  # multi-view bootstrap. Lower = more permissive.
+  bootstrap_min_score: 0.25
+
+  # Maximum number of CLIP feature vectors stored per person in the feature bank.
+  # Larger banks give more robust matching but use more memory.
+  feature_bank_max_size: 64
+
+  # During cross-camera matching, a detection must score above this threshold
+  # to update the person's feature bank. Prevents low-quality matches from
+  # polluting the bank.
+  online_bank_update_min_score: 0.35
+
+  # Minimum mask area as fraction of image area. Smaller masks are ignored
+  # during SAM3 prompt-frame selection and tracks that stay tiny on most frames
+  # are discarded as noise.
+  min_mask_area_ratio: 0.01
+
+  # ── Multi-frame anchors ──────────────────────────────────────────────────
+  # Anchors are additional box prompts injected at multiple frames before SAM
+  # propagation. They help SAM recover from tracking drift during occlusions
+  # or fast motion. SAM2 handles these well.
+
+  # Maximum anchor prompts per person. 0 = auto (computed from sequence length
+  # and min_anchor_frame_gap). Set to 1 to disable multi-frame anchors.
+  max_anchors_per_id: 0
+
+  # Minimum frame distance between two anchors for the same person. Prevents
+  # anchor clustering in a small time window.
+  min_anchor_frame_gap: 15
+
+  # Minimum CLIP match score for a detection to qualify as an anchor prompt.
+  # Lower = more anchor candidates but potentially worse quality.
+  anchor_score_threshold: 0.2
+
+  # If no detection meets anchor_score_threshold for a person, fall back to
+  # the single best detection regardless of score.
+  anchor_fallback_to_best_any: true
+
+  # Upper bound on auto-computed anchors per person. Prevents excessive prompts
+  # on very long sequences.
+  anchor_auto_max_cap: 32
+
+  # Number of candidate frames evaluated per anchor slot. Higher = better anchor
+  # selection but more YOLO+CLIP work.
+  anchor_samples_per_anchor: 6
+
+  # Prevent two different people from using heavily-overlapping anchor boxes on
+  # the same frame. If two anchors overlap by more than anchor_conflict_iou,
+  # the lower-scoring one is reassigned to a different frame.
+  anchor_enforce_cross_id_uniqueness: true
+  anchor_conflict_iou: 0.65
+
+  # ── Init camera anchors ──────────────────────────────────────────────────
+  # Same anchor concept but for the init camera (first camera processed).
+  # When enabled, the init camera gets multi-frame prompts before propagation,
+  # not just a single init-frame prompt.
+
+  # Enable multi-frame anchors on the init camera.
+  init_anchor_enable: true
+
+  # Minimum CLIP score for init-camera anchor candidates.
+  init_anchor_score_threshold: 0.2
+
+  # Max anchors per person on init camera. 0 = auto (same logic as max_anchors_per_id).
+  init_anchor_max_per_id: 0
+
+  # ── Cross-camera scoring ─────────────────────────────────────────────────
+  # When matching people from camera A to camera B, each detection gets a
+  # combined score = clip_weight * CLIP_similarity + epipolar_weight * epipolar_score.
+  # Epipolar scoring uses camera calibration (intrinsics + extrinsics from NPZ)
+  # to check geometric consistency. If calibration is unavailable, epipolar
+  # weight is ignored and only CLIP is used.
+
+  clip_weight: 0.4
+  epipolar_weight: 0.6
+
+  # Epipolar distance parameters. "auto" computes them from image diagonal.
+  # sigma_px: Gaussian width for distance-to-score conversion (in pixels).
+  # max_epipolar_dist_px: distances beyond this are clamped to score 0.
+  epipolar_sigma_px: auto
+  max_epipolar_dist_px: auto
+
+  # When set to "auto", these ratios are multiplied by the image diagonal to
+  # compute sigma_px and max_epipolar_dist_px.
+  epipolar_sigma_diag_ratio: 0.075
+  max_epipolar_dist_diag_ratio: 0.18
+
+  # Minimum CLIP similarity for a detection to be considered at all.
+  # 0.0 means any CLIP match is accepted (epipolar score still filters).
+  clip_min_similarity: 0.0
+
+  # Minimum combined (CLIP + epipolar) score. Detections below this are rejected.
+  combined_min_score: 0.2
+
+  # If true, allow some people to have no match in a camera (they won't get
+  # masks in that view). If false, the pipeline warns but continues.
+  allow_missing_ids: false
+
+# ─── Mask post-processing ─────────────────────────────────────────────────────
+# Applied after propagation, before mask export. Works for all SAM versions.
+
+masks:
+  # Step 1: Merge near-identical tracklets (same person tracked twice by SAM).
+  # Two tracklets are merged when their average mask IoU exceeds the threshold.
+  # 0.95 is very conservative — only fires for genuine duplicate tracks.
+  merge_duplicate_tracklets: true
+  merge_iou_threshold: 0.95
+
+  # Step 2: Discard tracklets whose mask is too small on most frames.
+  # A tracklet is discarded if its mask is below tiny_tracklet_min_area_ratio
+  # (fraction of image area) on more than (1 - tiny_tracklet_min_frame_ratio)
+  # of its frames. E.g., 0.2 = discard if small on >80% of frames.
+  discard_tiny_tracklets: true
+  tiny_tracklet_min_area_ratio: 0.005
+  tiny_tracklet_min_frame_ratio: 0.2
+
+# ─── SAM propagation ─────────────────────────────────────────────────────────
+
+sam:
+  # Propagate masks both forward and backward from anchor frames. Set to true
+  # when the init/anchor frame is in the middle of the sequence, so frames
+  # before it also get masks. Disable only if you always start from frame 0.
+  propagate_reverse: true
+
+  # ── Memory bounding for long / many-camera clips (issue #14) ──────────────
+  # SAM loads the whole decoded video at init_state, so VRAM grows with frame
+  # count. These knobs cap it; masks are identical (offload only moves tensors).
+  offload_video_to_cpu: true       # keep decoded frames on host RAM, stream to GPU (≈free; bounds VRAM)
+  offload_state_to_cpu: auto        # per-frame memory bank on host. auto = on past offload_state_min_frames; or true/false
+  offload_state_min_frames: 1500    # frame count above which "auto" enables offload_state_to_cpu
+  fp16_frames: false                # store decoded frames as float16 (halves frame RAM/VRAM). Opt-in: alters overlay pixels by ≤1 LSB
+
+# ─── Export ───────────────────────────────────────────────────────────────────
+# After mask generation, optionally convert image sequences to MP4 videos
+# and clean up the source images to save disk space.
+
+exports:
+  # Render per-person crop-summary + t-SNE + cross-camera debug PNGs. Off by
+  # default — these are pure matplotlib debugging aids and cost wall time. The
+  # mask PNGs, masks.npy cache, and the img_bbx crops that drive cross-camera
+  # matching are produced regardless. Also settable via --debug_crop_summary. (issue #14)
+  debug_crop_summary: false
+
+  # Keep full-res frames + masks in masks.npy (~100x larger). Off by default:
+  # masks.npy is slimmed to what matching/resume actually need (per-person
+  # centroids + crops + CLIP features); the full-res masks remain on disk as the
+  # per-frame mask PNGs. Also settable via --debug_full_masks_npy. (issue #14)
+  debug_full_masks_npy: false
+
+  # Convert mask overlay images to MP4 video.
+  export_masked_outputs_mp4: true
+  masked_outputs_fps: 30.0
+  # Delete overlay images after MP4 export.
+  remove_masked_outputs_images: true
+
+  # Convert anchor prompt overlay images to MP4.
+  export_prompt_overlays_mp4: true
+  prompt_overlays_fps: 4.0
+  remove_prompt_overlay_images: true
+
+  # Convert CLIP similarity panel images to MP4.
+  export_prompt_similarity_mp4: true
+  prompt_similarity_fps: 4.0
+  remove_prompt_similarity_images: true

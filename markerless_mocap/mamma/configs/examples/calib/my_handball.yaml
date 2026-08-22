@@ -1,0 +1,124 @@
+metadata:
+  source_format: qualisys_qtm_calibration_xml
+  source_file: configs/examples/calib/Calibration.xml
+  qtm_version: 2025.1 (build 14979)
+  binning_factor: 1.0
+  camera_model_filter: Miqus
+  camera_provenance:
+    cam01:
+      serial: '33599'
+      model: Miqus M3
+      viewrotation_degrees_not_applied: 0
+    cam02:
+      serial: '33601'
+      model: Miqus M3
+      viewrotation_degrees_not_applied: 0
+    cam05:
+      serial: '33600'
+      model: Miqus M3
+      viewrotation_degrees_not_applied: 0
+    cam06:
+      serial: '33598'
+      model: Miqus M3
+      viewrotation_degrees_not_applied: 0
+cameras:
+  cam01:
+    camera_model: pinhole
+    distortion_model: radtan
+    intrinsics:
+    - 1121.26037596875
+    - 1121.208740234375
+    - 922.784057625
+    - 529.8670654375
+    distortion_coeffs:
+    - 9.390625e-06
+    - -4.0578125e-05
+    - 5.28125e-06
+    - 6.40625e-07
+    resolution:
+    - 1824
+    - 1088
+    translation:
+    - 2.279544922
+    - -0.996513855
+    - 1.688862793
+    rotation_quaternion:
+    - -0.5088326268120047
+    - 0.6598650098896711
+    - 0.42711139814090154
+    - -0.35106036545446667
+  cam02:
+    camera_model: pinhole
+    distortion_model: radtan
+    intrinsics:
+    - 1119.2178955
+    - 1119.1563720625
+    - 940.5580444375
+    - 546.61328125
+    distortion_coeffs:
+    - 3.0e-06
+    - -2.0828125e-05
+    - 7.09375e-06
+    - 1.84375e-06
+    resolution:
+    - 1824
+    - 1088
+    translation:
+    - 2.1401203609999997
+    - 0.413482513
+    - 1.65391748
+    rotation_quaternion:
+    - -0.4457412797231875
+    - 0.5901372159922789
+    - 0.526981712319819
+    - -0.4187398389598117
+  cam05:
+    camera_model: pinhole
+    distortion_model: radtan
+    intrinsics:
+    - 1120.046142578125
+    - 1119.97790528125
+    - 907.069580078125
+    - 579.57385253125
+    distortion_coeffs:
+    - 2.1703125e-05
+    - -2.96875e-05
+    - -3.125e-07
+    - 2.625e-06
+    resolution:
+    - 1824
+    - 1088
+    translation:
+    - -1.880704102
+    - 0.511979187
+    - 2.553006592
+    rotation_quaternion:
+    - 0.30709337718919133
+    - -0.5892688002102129
+    - 0.6846299726031758
+    - -0.29956258010427167
+  cam06:
+    camera_model: pinhole
+    distortion_model: radtan
+    intrinsics:
+    - 1120.40319825
+    - 1120.524292
+    - 909.12365721875
+    - 522.754638671875
+    distortion_coeffs:
+    - 1.0234375e-05
+    - -3.603125e-05
+    - 7.921875e-06
+    - -6.546875e-06
+    resolution:
+    - 1824
+    - 1088
+    translation:
+    - -1.911279419
+    - -2.077420654
+    - 2.5770729980000002
+    rotation_quaternion:
+    - -0.45394987987039115
+    - 0.7118785343122976
+    - -0.48018643569489616
+    - 0.2378643435356877

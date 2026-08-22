@@ -1,0 +1,27 @@
+name: pose_camerahmr
+freeze_backbone: false
+backbone:
+  type: ViT
+  img_size: ${image_size}
+  patch_size: 16
+  embed_dim: 768
+  depth: 12
+  num_heads: 12
+  ratio: 1
+  use_checkpoint: false
+  mlp_ratio: 4
+  qkv_bias: true
+  drop_path_rate: 0.3
+use_mask: ${use_mask_encoder}
+decoder:
+  layer_name: 'MvCameraHMR'
+  n_views: 8
+  d_feat: 768
+  n_heads: 8
+  n_layers: 6
+  n_landmarks: ${num_joints}
+  uncertainty: true
+  dropout: 0.1
+  visibility: true
+  contact: false
+  floor_contact: false

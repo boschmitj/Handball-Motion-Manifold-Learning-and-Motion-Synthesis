@@ -1,0 +1,366 @@
+/*
+ * Design tokens — dark mode only.
+ *
+ * Surfaces are layered by elevation, each one step brighter than the page
+ * background so cards, popovers, and selected rows feel "lifted" instead
+ * of flat. Borders sit at low-alpha white so they read as separators
+ * rather than coloured rules.
+ *
+ * All colours are in oklch() so the perceptual lightness scale is
+ * predictable — "L" in oklch maps to roughly visible luminance, which
+ * makes contrast tuning easier than HSL or sRGB.
+ */
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --font-size: 16px;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --radius: 0.625rem;
+
+  /* Surface elevation ladder. Each step is ~+0.025 L from the previous. */
+  --background: oklch(0.165 0.018 252);   /* page bg, deepest */
+  --surface-1: oklch(0.190 0.020 252);    /* cards */
+  --surface-2: oklch(0.215 0.022 252);    /* nested cards, popover surfaces */
+  --surface-3: oklch(0.245 0.024 252);    /* hover, selected rows */
+  --surface-4: oklch(0.285 0.026 252);    /* active controls, prominent inputs */
+
+  /* Text — lightness ladder. */
+  --foreground: oklch(0.965 0.005 252);          /* body text, primary */
+  --foreground-muted: oklch(0.760 0.012 252);    /* secondary text */
+  --foreground-subtle: oklch(0.705 0.013 252);   /* tertiary, captions */
+  --foreground-faint: oklch(0.595 0.016 252);    /* hints, disabled */
+
+  /* Borders — derived from white at low alpha so they layer on any surface. */
+  --border-subtle: oklch(1 0 0 / 0.06);
+  --border:        oklch(1 0 0 / 0.10);
+  --border-strong: oklch(1 0 0 / 0.16);
+
+  /* Brand / interactive accent (cyan-blue). */
+  --primary:               oklch(0.715 0.158 232);
+  --primary-foreground:    oklch(0.165 0.018 252);
+  --primary-muted:         oklch(0.715 0.158 232 / 0.18);
+  --primary-muted-strong:  oklch(0.715 0.158 232 / 0.28);
+  --ring:                  oklch(0.715 0.158 232 / 0.55);
+
+  /* Destructive (red). */
+  --destructive:              oklch(0.660 0.215 25);
+  --destructive-foreground:   oklch(0.985 0 0);
+  --destructive-muted:        oklch(0.660 0.215 25 / 0.18);
+
+  /* Status accents — used by StatusBadge / pill components. */
+  --status-running:    oklch(0.730 0.145 235);
+  --status-running-bg: oklch(0.730 0.145 235 / 0.16);
+  --status-failed:     oklch(0.700 0.200 25);
+  --status-failed-bg:  oklch(0.700 0.200 25 / 0.16);
+  --status-pending:    oklch(0.810 0.140 80);
+  --status-pending-bg: oklch(0.810 0.140 80 / 0.18);
+  --status-completed:    oklch(0.760 0.160 158);
+  --status-completed-bg: oklch(0.760 0.160 158 / 0.16);
+  --status-mixed:      oklch(0.755 0.155 50);
+  --status-mixed-bg:   oklch(0.755 0.155 50 / 0.16);
+
+  /* shadcn aliases — keep so ui/* components keep working. */
+  --card: var(--surface-1);
+  --card-foreground: var(--foreground);
+  --popover: var(--surface-2);
+  --popover-foreground: var(--foreground);
+  --muted: var(--surface-2);
+  --muted-foreground: var(--foreground-subtle);
+  --accent: var(--surface-3);
+  --accent-foreground: var(--foreground);
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--foreground);
+  --input: var(--border);
+  --input-background: var(--surface-2);
+  --switch-background: var(--surface-3);
+
+  /* Charts — used by recharts wrappers. */
+  --chart-1: var(--primary);
+  --chart-2: oklch(0.760 0.160 158);
+  --chart-3: oklch(0.810 0.140 80);
+  --chart-4: oklch(0.700 0.200 305);
+  --chart-5: oklch(0.700 0.200 25);
+
+  /* Sidebar (used by ui/sidebar). */
+  --sidebar: var(--surface-1);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--surface-3);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+}
+
+@theme inline {
+  /* Expose tokens as Tailwind colours so utilities like bg-surface-1, text-foreground-muted, etc. work. */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-foreground-muted: var(--foreground-muted);
+  --color-foreground-subtle: var(--foreground-subtle);
+  --color-foreground-faint: var(--foreground-faint);
+
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-surface-4: var(--surface-4);
+
+  --color-border-subtle: var(--border-subtle);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-muted: var(--primary-muted);
+  --color-primary-muted-strong: var(--primary-muted-strong);
+  --color-ring: var(--ring);
+
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-muted: var(--destructive-muted);
+
+  --color-status-running:       var(--status-running);
+  --color-status-running-bg:    var(--status-running-bg);
+  --color-status-failed:        var(--status-failed);
+  --color-status-failed-bg:     var(--status-failed-bg);
+  --color-status-pending:       var(--status-pending);
+  --color-status-pending-bg:    var(--status-pending-bg);
+  --color-status-completed:     var(--status-completed);
+  --color-status-completed-bg:  var(--status-completed-bg);
+  --color-status-mixed:         var(--status-mixed);
+  --color-status-mixed-bg:      var(--status-mixed-bg);
+
+  /* shadcn aliases */
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-input: var(--input);
+  --color-input-background: var(--input-background);
+  --color-switch-background: var(--switch-background);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    font-size: var(--font-size);
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "ss01", "cv11";
+  }
+
+  /* Better default text selection on dark surfaces. */
+  ::selection {
+    background-color: var(--primary-muted-strong);
+    color: var(--foreground);
+  }
+
+  /* Subtle focus ring system used by interactive elements that don't ship one. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  /* Custom scrollbars that match the dark theme. */
+  *::-webkit-scrollbar { width: 10px; height: 10px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; border: 2px solid var(--background); }
+  *::-webkit-scrollbar-thumb:hover { background: var(--foreground-faint); }
+}
+
+/* Skeleton shimmer — a pale gradient sweeps left→right across surface-2,
+ * giving "loading" placeholders motion without the harsh pulse of
+ * Tailwind's default `animate-pulse`. Used by `<Skeleton>`. */
+@keyframes mamma-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@layer utilities {
+  .animate-shimmer {
+    background-image: linear-gradient(
+      90deg,
+      var(--surface-2) 0%,
+      var(--surface-3) 50%,
+      var(--surface-2) 100%
+    );
+    background-size: 200% 100%;
+    animation: mamma-shimmer 1.6s linear infinite;
+  }
+}
+
+/* CTA hover effects. Plain CSS (not @apply/@layer) so they render
+ * regardless of any Tailwind JIT or @layer ordering quirks.
+ *
+ * Two flavours:
+ *   .mamma-cta-primary   — used on the Home hero (explicit opt-in).
+ *   button[bg-primary]   — auto-applies the same effect to ANY
+ *                          primary-styled button/anchor app-wide so
+ *                          we don't have to touch every component.
+ *
+ * The auto-rule uses [class~="bg-primary"] (whole-word match), so it
+ * won't accidentally match `bg-primary-muted`, `bg-primary/30`, etc. */
+.mamma-cta {
+  transition:
+    filter 0.2s ease,
+    box-shadow 0.2s ease,
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease;
+}
+.mamma-cta-primary:hover:not(:disabled) {
+  filter: brightness(1.15);
+  /* Faux ring-with-offset: inner gap matches page bg, outer halo is primary. */
+  box-shadow:
+    0 0 0 2px var(--background),
+    0 0 0 4px oklch(0.715 0.158 232 / 0.7),
+    0 8px 24px -4px oklch(0.715 0.158 232 / 0.35);
+}
+.mamma-cta-secondary:hover {
+  background-color: var(--surface-3);
+  border-color: oklch(0.715 0.158 232 / 0.6);
+  color: var(--primary);
+}
+
+/* App-wide auto-application. Skips elements that already opt in via
+ * .mamma-cta (Home hero) to avoid double-rules. */
+button[class~="bg-primary"]:not(.mamma-cta):not(:disabled),
+a[class~="bg-primary"]:not(.mamma-cta) {
+  transition:
+    filter 0.2s ease,
+    box-shadow 0.2s ease;
+}
+button[class~="bg-primary"]:not(.mamma-cta):not(:disabled):hover,
+a[class~="bg-primary"]:not(.mamma-cta):hover {
+  filter: brightness(1.15);
+  box-shadow:
+    0 0 0 2px var(--background),
+    0 0 0 3px oklch(0.715 0.158 232 / 0.6),
+    0 6px 18px -4px oklch(0.715 0.158 232 / 0.30);
+}
+
+/* Secondary buttons: surface-2 background with a border. Heuristic
+ * narrow enough to skip non-button elements (cards, popovers) that
+ * also use those classes but aren't <button>/<a>. */
+button[class~="bg-surface-2"][class~="border"]:not(.mamma-cta):not(:disabled),
+a[class~="bg-surface-2"][class~="border"]:not(.mamma-cta) {
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease;
+}
+button[class~="bg-surface-2"][class~="border"]:not(.mamma-cta):not(:disabled):hover,
+a[class~="bg-surface-2"][class~="border"]:not(.mamma-cta):hover {
+  background-color: var(--surface-3);
+  border-color: oklch(0.715 0.158 232 / 0.5);
+}
+
+/* Clickable cards: divs with role="button" that use surface-1 or
+ * surface-2 with a border. Examples: Results page capture cards,
+ * Resources cards on Home. */
+[role="button"][class~="border"]:not(.mamma-cta) {
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    background-color 0.2s ease;
+}
+[role="button"][class~="border"]:not(.mamma-cta):hover {
+  border-color: oklch(0.715 0.158 232 / 0.5);
+  box-shadow:
+    0 0 0 1px oklch(0.715 0.158 232 / 0.3),
+    0 8px 24px -4px oklch(0.715 0.158 232 / 0.20);
+}
+
+/* Clickable table cells (Tasks / Results matrices). Inline Tailwind
+ * hover utilities don't fire in this env so we drive the cell tint
+ * + inner ring from plain CSS. The selected state is still a Tailwind
+ * class on the cell — this rule only handles the unselected hover. */
+.mamma-cell-clickable {
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.mamma-cell-clickable:hover {
+  background-color: oklch(0.715 0.158 232 / 0.12);
+  box-shadow: inset 0 0 0 1px oklch(0.715 0.158 232 / 0.35);
+}
+
+/* Clickable table rows (Captures list, etc). The tag+class selector
+ * outranks the stripe `bg-surface-1` utility so the cyan tint wins
+ * on hover. */
+tr.mamma-row-clickable {
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+tr.mamma-row-clickable:hover {
+  background-color: oklch(0.715 0.158 232 / 0.10);
+}
+tr.mamma-row-clickable:hover td {
+  background-color: transparent;
+}
+
+/* Inline external link styled as a soft cyan pill. Renders as inline-
+ * flex so it sits in prose without breaking the baseline. The arrow
+ * icon nudges up-and-right on hover (driven by Tailwind `group/link`
+ * utilities on the icon itself). */
+a.mamma-inline-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.05rem 0.4rem;
+  margin: 0 0.05rem;
+  border-radius: 0.3rem;
+  color: var(--primary);
+  background-color: oklch(0.715 0.158 232 / 0.10);
+  border: 1px solid oklch(0.715 0.158 232 / 0.25);
+  text-decoration: none;
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+a.mamma-inline-link:hover {
+  background-color: oklch(0.715 0.158 232 / 0.20);
+  border-color: oklch(0.715 0.158 232 / 0.55);
+  box-shadow: 0 0 0 1px oklch(0.715 0.158 232 / 0.3);
+}
+a.mamma-inline-link:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring);
+}

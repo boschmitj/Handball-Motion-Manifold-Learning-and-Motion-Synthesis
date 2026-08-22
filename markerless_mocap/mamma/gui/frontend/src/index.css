@@ -1,0 +1,6 @@
+@import "tailwindcss";
+@import "./styles/globals.css";
+
+/* Tell Tailwind v4 where to find class names. */
+@source "./**/*.{ts,tsx}";
+@source "../index.html";

@@ -1,0 +1,62 @@
+{
+  "capture_root": "../../../data/mamma_markerless_iphones/indoors",
+  "calib": "../calib/iphones_indoors.yaml",
+  "cam_fps": 30,
+  "sequences": {
+    "000": {
+      "name": "crossing_arms"
+    },
+    "001": {
+      "name": "grabbing_bucket"
+    },
+    "002": {
+      "name": "grappling"
+    },
+    "003": {
+      "name": "holding_person_lifted"
+    },
+    "004": {
+      "name": "hugging"
+    },
+    "005": {
+      "name": "jumping"
+    },
+    "006": {
+      "name": "lean_on_shoulder_tap"
+    },
+    "007": {
+      "name": "performing_splits"
+    },
+    "008": {
+      "name": "person_lift_from_ground"
+    },
+    "009": {
+      "name": "running"
+    },
+    "010": {
+      "name": "sitting_cross_legged_on_ground"
+    },
+    "011": {
+      "name": "sitting_on_stool"
+    },
+    "012": {
+      "name": "squatting"
+    },
+    "013": {
+      "name": "stacking_cones"
+    },
+    "014": {
+      "name": "talking_on_phone"
+    },
+    "015": {
+      "name": "warming_up"
+    }
+  },
+  "cams": [
+    "A001",
+    "B001",
+    "C001",
+    "D001"
+  ],
+  "videos_subdir": "videos"
+}

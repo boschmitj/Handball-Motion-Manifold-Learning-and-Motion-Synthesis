@@ -1,0 +1,13 @@
+# Unix -> Windows path mapping, used by utils.paths.string_path_to_windows
+# on Windows hosts only. Customize to match your own cluster mount points
+# if you need Windows support; Linux users can leave this as-is.
+server:
+  unix:
+    ps: "/ps"
+    cluster: "/is/cluster"
+    fast: "/fast"
+
+  windows:
+    ps: "\\ps-access.is.localnet"
+    cluster: "\\files.cluster.is.localnet"
+    fast: "\\files.cluster.is.localnet\\fast"

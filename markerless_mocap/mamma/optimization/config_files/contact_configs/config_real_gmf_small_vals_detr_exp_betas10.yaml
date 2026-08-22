@@ -1,0 +1,141 @@
+n_betas: 10
+use_v_template: False
+use_bun_model: False
+optim:
+  first_run:
+    optimize_only_global_rotation: True
+    optimize_only_body: True
+    optimize_only_hand_joints: False
+    optimize_hand_joints: False
+    optimize_only_limbs: False
+    vis_clip_value: 0.8
+    optimizer: Adam
+    optim_verts: True
+    num_iters: 50
+    learning_rate: 0.001
+    reproj_loss_name: geman_mcclure
+    only_ten_first_frames: False
+    use_sparse_body_ldmks: False
+    scale_uncertainties: False
+    optim_var:
+      pose: True
+      betas: False
+      trans: True
+    losses:
+      reproj_loss:
+        weight: 20. #0 # #10000 # 20
+      l2_loss_3d_points:
+        weight: 100
+
+
+  second_run:
+    optimize_only_body: False
+    optimize_only_hand_joints: False
+    optimize_hand_joints: False
+    optimize_only_limbs: False
+    vis_clip_value: 0.8
+    optimizer: Adam
+    optim_verts: True
+    num_iters: 500
+    learning_rate: 0.001
+    reproj_loss_name: geman_mcclure
+    only_ten_first_frames: False
+    use_sparse_body_ldmks: False
+    scale_uncertainties: False
+    optim_var:
+      pose: True
+      betas: True
+      trans: True
+    losses:
+      reproj_loss:
+        weight: 100. #50. # 2.0
+      # rotation_prior_loss:
+      #   weight: 0.01
+      body_shape_prior_loss:
+        weight: 1.
+      # acceleration_loss:
+      #   weight: 0.001
+      # angular_acc_loss:
+      #   weight: 0.005
+      # angle_prior_loss:
+      #   weight: 0.1
+      # rot_consistency_loss:
+      #   weight: 1.0
+      # pts3d_temp_loss:
+      #   weight: 0.1
+
+  third_run:
+    optimize_only_body: False
+    optimize_only_hand_joints: False
+    optimize_hand_joints: False
+    optimize_only_limbs: False
+    vis_clip_value: 0.2
+    optimizer: Adam
+    optim_verts: True
+    num_iters: 100
+    learning_rate: 0.001
+    reproj_loss_name: geman_mcclure
+    only_ten_first_frames: False
+    use_sparse_body_ldmks: False
+    scale_uncertainties: True
+    optim_var:
+      pose: True
+      betas: True
+      trans: True
+    losses:
+      reproj_loss:
+        weight: 120. #50. # 2.0
+      # rotation_prior_loss:
+      #   weight: 0.01
+      # body_shape_prior_loss:
+      #   weight: 100
+      # acceleration_loss:
+      #   weight: 0.001
+      angular_acc_loss:
+        weight: 0.003
+      # angle_prior_loss:
+      #   weight: 0.1
+      # rot_consistency_loss:
+      #   weight: 1.0
+      # intersection_loss:
+      #   weight: 10.0
+      pts3d_temp_loss:
+        weight: 0.03
+
+  fourth_run:
+    optimize_only_body: True
+    optimize_only_hand_joints: False
+    optimize_hand_joints: False
+    optimize_only_limbs: True
+    vis_clip_value: 0.2
+    optimizer: Adam
+    optim_verts: True
+    num_iters: 25
+    learning_rate: 0.001
+    reproj_loss_name: geman_mcclure
+    only_ten_first_frames: False
+    use_sparse_body_ldmks: False
+    scale_uncertainties: True
+    optim_var:
+      pose: True
+      betas: False
+      trans: False
+    losses:
+      reproj_loss:
+        weight: 300. #50. # 2.0
+      # rotation_prior_loss:
+      #   weight: 0.01
+      # body_shape_prior_loss:
+      #   weight: 100
+      # acceleration_loss:
+      #   weight: 0.001
+      angular_acc_loss:
+        weight: 0.005
+      # angle_prior_loss:
+      #   weight: 0.1
+      # rot_consistency_loss:
+      #   weight: 1.0
+      intersection_loss:
+        weight: 1.0
+      pts3d_temp_loss:
+        weight: 0.05

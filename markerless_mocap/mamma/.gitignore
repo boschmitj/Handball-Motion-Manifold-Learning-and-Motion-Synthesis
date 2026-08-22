@@ -1,0 +1,64 @@
+# Python packaging.
+*.egg-info/
+build/
+dist/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editor / IDE.
+.idea/
+.vscode/
+
+# Local pipeline outputs and runtime state. The user keeps their actual
+# runs under output/, gitignored; the .gitkeep keeps the dir present.
+output/
+!output/.gitkeep
+# legacy plural; kept for safety (inline comments aren't valid in .gitignore)
+outputs/
+var/
+logs/
+
+# landmarks/train.py consolidates all run artifacts (experiments, checkpoints,
+# wandb, Hydra run dir) under this single root at the repo root.
+landmark_outputs/
+# Legacy checkpoint dir from before the consolidation above; train.py no longer
+# writes here, but ignore it so stray pre-consolidation runs don't get tracked.
+checkpoints/
+
+# User-provided data and model weights live under data/. We ignore the
+# contents but keep the directory structure (any .gitkeep stays tracked),
+# and the bundled download_*.sh helper scripts.
+data/**
+!data/.gitkeep
+!data/**/.gitkeep
+!data/download_*.sh
+# Note: data/body_models/downsampled_verts/smplx_512_body_parts.npz is a
+# small (~6 KB) derived asset that ma_3d loads alongside verts_512.pkl.
+# It is force-added (git add -f) because the data/** rule above ignores
+# all parent directories. Generated from
+# landmarks/lib/datasets/_smplx_512_body_parts.json.
+
+# SAM 2 config YAMLs fetched at install time per
+# docs/INSTALL.md → Manual fallback (wget from the upstream sam2 repo).
+# Runtime asset, not source.
+configs/sam2.1/
+
+# Per-installation env overrides and secrets. Loaded by inference.env
+# on top of the in-code DEFAULTS dict. Never committed.
+.env.local
+.env
+
+# GUI runtime artifacts. The Flask backend writes its SQLite DB,
+# generated task-config snapshots, and per-step .log/.out/.err under
+# gui/var/. The frontend build output and npm cache are similarly
+# regenerable.
+gui/var/
+gui/frontend/build/
+gui/frontend/node_modules/
+gui/backend/__pycache__/
+
+# OS junk.
+.DS_Store

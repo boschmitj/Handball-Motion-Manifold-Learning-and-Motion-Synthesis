@@ -1,0 +1,54 @@
+setuptools<81
+numpy<2,>=1.26
+kornia
+smplx
+tqdm
+pyrender
+scikit-learn
+point_cloud_utils
+wandb
+open3d
+opencv-python-headless
+matplotlib
+seaborn
+# Pin: rerun-sdk >=0.24 hard-requires numpy>=2, which conflicts with the
+# numpy<2 pin above (sam2/sam3 also need numpy<2). 0.23.1 is the last
+# release on the numpy 1.x line.
+rerun-sdk==0.23.1
+pytorch_lightning==2.0.0
+munkres
+yacs
+albumentations==1.4.24
+webdataset
+line_profiler
+hydra-core
+psutil
+einops
+timm
+scenepic
+loguru
+transforms3d>=0.4.1,<0.5
+pyyaml>=6.0
+pycocotools
+iopath>=0.1.10
+ultralytics
+open_clip_torch
+setuptools
+scikit-image
+imageio-ffmpeg
+git+https://github.com/facebookresearch/sam2
+git+https://github.com/facebookresearch/sam3
+
+# GUI backend (gui/backend/app.py). Flask comes in transitively via other
+# ML deps today, but pin it explicitly so the GUI keeps working if a
+# future requirements bump removes the transitive route. python-dotenv
+# is used by inference.env.bootstrap_env to load .env.local. pyyaml is
+# already listed above.
+flask
+flask-cors
+python-dotenv>=1.0
+# Production WSGI server used by gui/scripts/prod.sh. Pure-Python,
+# cross-platform, ~50 KB. Multi-threaded by default so a streaming
+# preview MP4 doesn't block API polling. dev.sh stays on Flask's
+# built-in Werkzeug server for the debugger + auto-reloader.
+waitress>=3

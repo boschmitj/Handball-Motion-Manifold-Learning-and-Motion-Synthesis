@@ -1,0 +1,22 @@
+optimizer:
+  type: AdamW
+  lr: 1e-4
+  betas: [0.9, 0.999]
+  weight_decay: ${if:${debug_mode}, 0.0, 1e-4}
+  lr_backbone: 1e-5
+  constructor: LayerDecayOptimizerConstructor
+  paramwise_cfg:
+    num_layers: 12
+    layer_decay_rate: 1.0
+    custom_keys:
+      bias: {decay_mult: 0.0}
+      pos_embed: {decay_mult: 0.0}
+      relative_position_bias_table: {decay_mult: 0.0}
+      norm: {decay_mult: 0.0}
+
+lr_config:
+  policy: ${if:${debug_mode}, constant, step}
+  warmup: ${if:${debug_mode}, null, linear}
+  warmup_iters: 500
+  warmup_ratio: ${if:${debug_mode}, 0.001, 0.1}
+  step: ${if:${debug_mode}, [3, 5], [20, 40]}

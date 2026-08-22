@@ -1,0 +1,23 @@
+name: mamma
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.11
+  - pip
+  - numpy<2
+  # nodejs is here so `npm install` + `npm run dev` for the GUI's Vite
+  # frontend work inside the same env that runs the pipeline. Keeps the
+  # whole project on one conda env instead of forcing users to manage
+  # Node separately.
+  - nodejs=20
+  # wget powers both the data/download_mamma_*.sh fetch scripts and the GUI
+  # backend's MPI downloader (gui/backend/data_readiness.py shells out to it
+  # — download.php serves the file to wget but not to urllib). macOS doesn't
+  # ship wget, so bundle it here rather than make users install it separately.
+  - wget
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu124
+      - torch==2.5.1
+      - torchvision==0.20.1
+      - decord

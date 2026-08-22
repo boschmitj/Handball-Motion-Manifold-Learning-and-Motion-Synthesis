@@ -1,0 +1,206 @@
+{
+  "capture_root": "../../../data/mamma_markerless_dance",
+  "calib": "../calib/250903_Ballroom.yaml",
+  "cam_fps": 30,
+  "sequences": {
+    "000": {
+      "name": "250903_Ballroom_2StepsSpinTurn_03694_03695_1"
+    },
+    "001": {
+      "name": "250903_Ballroom_3Step_03694_03695_1"
+    },
+    "002": {
+      "name": "250903_Ballroom_BackHover_03694_03695_1"
+    },
+    "003": {
+      "name": "250903_Ballroom_BackSideclose_03694_03695_1"
+    },
+    "004": {
+      "name": "250903_Ballroom_Backward3StepCurved_03694_03695_1"
+    },
+    "005": {
+      "name": "250903_Ballroom_BackwardCurvedFeather_03694_03695_1"
+    },
+    "006": {
+      "name": "250903_Ballroom_ChangeOfDirection_03694_03695_1"
+    },
+    "007": {
+      "name": "250903_Ballroom_ChangeStep1_03694_03695_1"
+    },
+    "008": {
+      "name": "250903_Ballroom_ChasseFromPromenade_03694_03695_1"
+    },
+    "009": {
+      "name": "250903_Ballroom_ChasseToTheRight_03694_03695_1"
+    },
+    "010": {
+      "name": "250903_Ballroom_CheckedNatural_03694_03695_1"
+    },
+    "011": {
+      "name": "250903_Ballroom_ClosedPromenade_03694_03695_1"
+    },
+    "012": {
+      "name": "250903_Ballroom_CurvedFeather_03694_03695_1"
+    },
+    "013": {
+      "name": "250903_Ballroom_DoubleReverse_03694_03695_1"
+    },
+    "014": {
+      "name": "250903_Ballroom_FallawaySlipPivot_03694_03695_1"
+    },
+    "015": {
+      "name": "250903_Ballroom_FallawaySlipPivot_03694_03695_1_1"
+    },
+    "016": {
+      "name": "250903_Ballroom_FeatherStep_03694_03695_1"
+    },
+    "017": {
+      "name": "250903_Ballroom_FiveStep_03694_03695_1"
+    },
+    "018": {
+      "name": "250903_Ballroom_FollowayPromenade_03694_03695_1"
+    },
+    "019": {
+      "name": "250903_Ballroom_HeelPull_03694_03695_1"
+    },
+    "020": {
+      "name": "250903_Ballroom_Hesitation_03694_03695_1"
+    },
+    "021": {
+      "name": "250903_Ballroom_HoverCross_03694_03695_1"
+    },
+    "022": {
+      "name": "250903_Ballroom_Improv1_Foxtrot_03694_03695_1"
+    },
+    "023": {
+      "name": "250903_Ballroom_Improv1_Foxtrot_03694_03695_1_1"
+    },
+    "024": {
+      "name": "250903_Ballroom_Improv1_Quickstep_03694_03695_1"
+    },
+    "025": {
+      "name": "250903_Ballroom_Improv1_Quickstep_03694_03695_1_1"
+    },
+    "026": {
+      "name": "250903_Ballroom_Improv1_SlowWaltz_03694_03695_1"
+    },
+    "027": {
+      "name": "250903_Ballroom_Improv1_VienneseWaltz_03694_03695_1"
+    },
+    "028": {
+      "name": "250903_Ballroom_Improv1_VienneseWaltz_03694_03695_1_1"
+    },
+    "029": {
+      "name": "250903_Ballroom_Improv2_Quickstep_03694_03695_1_1"
+    },
+    "030": {
+      "name": "250903_Ballroom_Improv2_SlowWaltz_03694_03695_1"
+    },
+    "031": {
+      "name": "250903_Ballroom_Kick_03694_03695_1"
+    },
+    "032": {
+      "name": "250903_Ballroom_NaturalRockTurn_03694_03695_1"
+    },
+    "033": {
+      "name": "250903_Ballroom_NaturalTelemark_03694_03695_1"
+    },
+    "034": {
+      "name": "250903_Ballroom_NaturalTurn_03694_03695_1"
+    },
+    "035": {
+      "name": "250903_Ballroom_OutsidechangetoCP_03694_03695_1"
+    },
+    "036": {
+      "name": "250903_Ballroom_ProgressiveChasseLeft_03694_03695_1"
+    },
+    "037": {
+      "name": "250903_Ballroom_ReverseTurnOpenFinish_03694_03695_1"
+    },
+    "038": {
+      "name": "250903_Ballroom_ReverseTurnVW_03694_03695_1"
+    },
+    "039": {
+      "name": "250903_Ballroom_ReverseTurn_03694_03695_1"
+    },
+    "040": {
+      "name": "250903_Ballroom_ReverseWeave_03694_03695_1"
+    },
+    "041": {
+      "name": "250903_Ballroom_RightLunge_03694_03695_1"
+    },
+    "042": {
+      "name": "250903_Ballroom_RightLunge_03694_03695_1_1"
+    },
+    "043": {
+      "name": "250903_Ballroom_Rocks_03694_03695_1"
+    },
+    "044": {
+      "name": "250903_Ballroom_SambaWhisk_03694_03695_1"
+    },
+    "045": {
+      "name": "250903_Ballroom_ScatterChasse_03694_03695_1"
+    },
+    "046": {
+      "name": "250903_Ballroom_SlowStep_03694_03695_1"
+    },
+    "047": {
+      "name": "250903_Ballroom_SpanishDrag_03694_03695_1"
+    },
+    "048": {
+      "name": "250903_Ballroom_SpinTurn_03694_03695_1"
+    },
+    "049": {
+      "name": "250903_Ballroom_SpinTurn_03694_03695_1_1"
+    },
+    "050": {
+      "name": "250903_Ballroom_StepHopx2_03694_03695_1"
+    },
+    "051": {
+      "name": "250903_Ballroom_SwivelSF_03694_03695_1"
+    },
+    "052": {
+      "name": "250903_Ballroom_Swivel_03694_03695_1"
+    },
+    "053": {
+      "name": "250903_Ballroom_ThrowawayOversway_03694_03695_1"
+    },
+    "054": {
+      "name": "250903_Ballroom_Whisk_03694_03695_1"
+    }
+  },
+  "cams": [
+    "IOI_01",
+    "IOI_02",
+    "IOI_03",
+    "IOI_04",
+    "IOI_05",
+    "IOI_06",
+    "IOI_07",
+    "IOI_08",
+    "IOI_09",
+    "IOI_10",
+    "IOI_11",
+    "IOI_12",
+    "IOI_13",
+    "IOI_14",
+    "IOI_15",
+    "IOI_16",
+    "IOI_17",
+    "IOI_18",
+    "IOI_19",
+    "IOI_20",
+    "IOI_21",
+    "IOI_22",
+    "IOI_23",
+    "IOI_24",
+    "IOI_25",
+    "IOI_26",
+    "IOI_27",
+    "IOI_28",
+    "IOI_29",
+    "IOI_30",
+    "IOI_31",
+    "IOI_32"
+  ]
+}

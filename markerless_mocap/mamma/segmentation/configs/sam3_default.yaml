@@ -1,0 +1,158 @@
+# SAM3 configuration — experimental, use when SAM3 is installed.
+#
+# SAM3 uses joint object consolidation, so multi-frame anchors are automatically
+# disabled (capped to 1 per ID at runtime). Single-frame prompting works well
+# on the init camera. Cross-camera tracking may degrade on dense scenes (6+ people).
+#
+# Usage:
+#   python run_ma_masks.py --sam_version sam3 --assignment_cfg configs/sam3.yaml ...
+
+# ─── Scene ────────────────────────────────────────────────────────────────────
+
+scene:
+  # Fixed number of people in the scene. null = auto-detect from YOLO.
+  expected_subjects: null
+
+  # Build per-person CLIP feature bank from other cameras before processing them.
+  bootstrap_multiview_bank: true
+
+# ─── Matching ─────────────────────────────────────────────────────────────────
+
+matching:
+  # Skip the first N frames for all detection and matching operations.
+  # Early frames are often dark (lights off) or show people entering.
+  # Skipped frames still receive masks via backward propagation.
+  start_frame: 10
+
+  # Sample every Nth frame for cross-camera matching. At 30fps, 50 = ~1.7s.
+  sample_interval: 50
+
+  # Minimum sampled frames regardless of sequence length.
+  min_samples: 5
+
+  # YOLO person detection confidence. Lower catches more people but may
+  # produce false positives (filtered by CLIP matching downstream).
+  yolo_person_conf: 0.5
+
+  # Remove duplicate YOLO boxes overlapping by more than this IoU.
+  yolo_dedup_enable: true
+  yolo_dedup_iou: 0.75
+
+  # Frame offsets for multi-view bootstrap. [0] = init frame only.
+  bootstrap_frame_offsets: [0]
+
+  # Minimum CLIP score for bootstrap detections.
+  bootstrap_min_score: 0.25
+
+  # Max CLIP features per person in the feature bank.
+  feature_bank_max_size: 64
+
+  # Minimum score for a detection to update the feature bank.
+  online_bank_update_min_score: 0.35
+
+  # Minimum mask area as fraction of image area. Smaller masks are ignored
+  # during SAM3 prompt-frame selection and tracks that stay tiny on most frames
+  # are discarded as noise.
+  min_mask_area_ratio: 0.01
+
+  # Multi-frame anchors disabled for SAM3 (enforced at runtime regardless
+  # of this setting — SAM3's joint consolidation makes them counterproductive).
+  init_anchor_enable: false
+
+  # Maximum number of candidate frames scanned when selecting a single prompt
+  # frame for SAM3. The actual number scales with clip length and is capped
+  # here to keep the search fast on long sequences.
+  sam3_redetect_samples: 30
+
+  # Sample every Nth frame for CLIP feature averaging during cross-camera
+  # ID remapping (sam3_prompt mode). Lower = more frames sampled = more robust but slower.
+  # With 100 frames and interval 10, samples ~10 frames. Minimum 3 frames always sampled.
+  remap_clip_interval: 10
+
+  # ── Cross-camera scoring ─────────────────────────────────────────────────
+  # Combined score = clip_weight * CLIP + epipolar_weight * epipolar_geometry.
+  # Epipolar requires camera calibration in NPZ (cam_int, cam_ext).
+  # If unavailable, only CLIP is used.
+
+  clip_weight: 0.4
+  epipolar_weight: 0.6
+
+  # Epipolar distance params. "auto" = computed from image diagonal.
+  epipolar_sigma_px: auto
+  max_epipolar_dist_px: auto
+  epipolar_sigma_diag_ratio: 0.075
+  max_epipolar_dist_diag_ratio: 0.18
+
+  # Minimum CLIP similarity to consider a detection. 0.0 = accept all.
+  clip_min_similarity: 0.0
+
+  # Minimum combined score. Below this, detection is rejected.
+  combined_min_score: 0.2
+
+  # Allow some people to have no match in a camera view.
+  allow_missing_ids: false
+
+# ─── Mask post-processing ─────────────────────────────────────────────────────
+# Applied after propagation, before mask export. Works for all SAM versions.
+
+masks:
+  # Step 1: Merge near-identical tracklets (same person tracked twice by SAM).
+  # Two tracklets are merged when their average mask IoU exceeds the threshold.
+  # 0.95 is very conservative — only fires for genuine duplicate tracks.
+  merge_duplicate_tracklets: true
+  merge_iou_threshold: 0.95
+
+  # Step 2: Discard tracklets whose mask is too small on most frames.
+  # A tracklet is discarded if its mask is below tiny_tracklet_min_area_ratio
+  # (fraction of image area) on more than (1 - tiny_tracklet_min_frame_ratio)
+  # of its frames. E.g., 0.2 = discard if small on >80% of frames.
+  discard_tiny_tracklets: true
+  tiny_tracklet_min_area_ratio: 0.005
+  tiny_tracklet_min_frame_ratio: 0.2
+
+# ─── SAM propagation ─────────────────────────────────────────────────────────
+
+sam:
+  # Propagate both forward and backward from anchor frames.
+  propagate_reverse: true
+
+# ─── SAM3 tracking overrides (sam3_prompt mode) ─────────────────────────────
+# Override SAM3's internal tracking config at runtime. These are applied
+# directly to the model after construction (predictor.model.<field>).
+# Only non-null values are applied; set to null to keep SAM3's default.
+#
+# Key parameters for reducing tracklet fragmentation:
+#   new_det_thresh:        threshold for spawning a new object (default 0.7, higher = fewer new IDs)
+#   trk_assoc_iou_thresh:  IoU for considering a tracklet unmatched (default 0.5, lower = stickier tracks)
+#   init_trk_keep_alive:   frames a new track survives without re-matching (default 30)
+#   max_trk_keep_alive:    max frames any track survives without re-matching (default 30)
+#
+# NOTE: recondition_on_trk_masks exists in HF config.json but is NOT used
+# by the Meta SAM3 source code. Reconditioning is controlled by
+# recondition_every_nth_frame and internal bbox IoU heuristics instead.
+
+sam3_tracking:
+  new_det_thresh: null
+  trk_assoc_iou_thresh: null
+  recondition_every_nth_frame: null
+  init_trk_keep_alive: null
+  max_trk_keep_alive: null
+  min_trk_keep_alive: null
+  score_threshold_detection: null
+  assoc_iou_thresh: null
+  hotstart_delay: null
+  hotstart_dup_thresh: null
+  hotstart_unmatch_thresh: null
+
+# ─── Export ───────────────────────────────────────────────────────────────────
+
+exports:
+  export_masked_outputs_mp4: true
+  masked_outputs_fps: 30.0
+  remove_masked_outputs_images: true
+  export_prompt_overlays_mp4: true
+  prompt_overlays_fps: 4.0
+  remove_prompt_overlay_images: true
+  export_prompt_similarity_mp4: true
+  prompt_similarity_fps: 4.0
+  remove_prompt_similarity_images: true

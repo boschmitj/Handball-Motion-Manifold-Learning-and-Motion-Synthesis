@@ -1,0 +1,91 @@
+{
+  "capture_root": "../../../data/mamma_eval_singles",
+  "calib": "../calib/230929_WhiteRabbit.yaml",
+  "cam_fps": 30,
+  "sequences": {
+    "000": {
+      "name": "230929_WhiteRabbit_CatchBall_50048_1"
+    },
+    "001": {
+      "name": "230929_WhiteRabbit_CatchBall_50049_1"
+    },
+    "002": {
+      "name": "230929_WhiteRabbit_CoffeeTable_50049_1"
+    },
+    "003": {
+      "name": "230929_WhiteRabbit_CoffeeTable_50050_1"
+    },
+    "004": {
+      "name": "230929_WhiteRabbit_LungeStretch_50048_1"
+    },
+    "005": {
+      "name": "230929_WhiteRabbit_LungeStretch_50049_1"
+    },
+    "006": {
+      "name": "230929_WhiteRabbit_LungeStretch_50050_1"
+    },
+    "007": {
+      "name": "230929_WhiteRabbit_Stepper_50049_1"
+    },
+    "008": {
+      "name": "230929_WhiteRabbit_Stepper_50050_1"
+    },
+    "009": {
+      "name": "230929_WhiteRabbit_Stretches_50049_1"
+    },
+    "010": {
+      "name": "230929_WhiteRabbit_SubjectCalib_50048_1"
+    },
+    "011": {
+      "name": "230929_WhiteRabbit_SubjectCalib_50050_1"
+    },
+    "012": {
+      "name": "230929_WhiteRabbit_WalkBarStool_50048_1"
+    },
+    "013": {
+      "name": "230929_WhiteRabbit_WalkBarStool_50049_1"
+    },
+    "014": {
+      "name": "230929_WhiteRabbit_WalkBarStool_50050_1"
+    },
+    "015": {
+      "name": "230929_WhiteRabbit_WalkGreenChair_50048_1"
+    },
+    "016": {
+      "name": "230929_WhiteRabbit_WalkGreenChair_50049_1"
+    },
+    "017": {
+      "name": "230929_WhiteRabbit_WalkGreenChair_50050_1"
+    },
+    "018": {
+      "name": "230929_WhiteRabbit_WalkLaptop_50048_1"
+    },
+    "019": {
+      "name": "230929_WhiteRabbit_WalkLaptop_50048_2"
+    },
+    "020": {
+      "name": "230929_WhiteRabbit_WalkLaptop_50049_3"
+    },
+    "021": {
+      "name": "230929_WhiteRabbit_WalkLaptop_50050_1"
+    }
+  },
+  "cams": [
+    "IOI_01",
+    "IOI_02",
+    "IOI_03",
+    "IOI_04",
+    "IOI_05",
+    "IOI_06",
+    "IOI_07",
+    "IOI_08",
+    "IOI_09",
+    "IOI_10",
+    "IOI_11",
+    "IOI_12",
+    "IOI_13",
+    "IOI_14",
+    "IOI_15",
+    "IOI_16"
+  ]
+}

@@ -1,0 +1,98 @@
+{
+  "capture_root": "../../../data/mamma_markerless_dance",
+  "calib": "../calib/050825_WestCoastSwing.yaml",
+  "cam_fps": 30,
+  "sequences": {
+    "000": {
+      "name": "050825_WestCoastSwing_CutOff_03688_03689_1"
+    },
+    "001": {
+      "name": "050825_WestCoastSwing_Improv_Markers_1_03688_03689_1"
+    },
+    "002": {
+      "name": "050825_WestCoastSwing_Improv_Markers_2_03688_03689_1"
+    },
+    "003": {
+      "name": "050825_WestCoastSwing_Improv_NoMarkersLose_1_03688_03689_1"
+    },
+    "004": {
+      "name": "050825_WestCoastSwing_Improv_NoMarkersLose_2_03688_03689_1"
+    },
+    "005": {
+      "name": "050825_WestCoastSwing_Improv_NoMarkersLose_3_03688_03689_1"
+    },
+    "006": {
+      "name": "050825_WestCoastSwing_Improv_NoMarkersLose_4_03688_03689_1"
+    },
+    "007": {
+      "name": "050825_WestCoastSwing_Improv_NoMarkers_1_03688_03689_1"
+    },
+    "008": {
+      "name": "050825_WestCoastSwing_Improv_NoMarkers_3_03688_03689_1"
+    },
+    "009": {
+      "name": "050825_WestCoastSwing_InsideTurn_03688_03689_1"
+    },
+    "010": {
+      "name": "050825_WestCoastSwing_LeftSidePass_03688_03689_1"
+    },
+    "011": {
+      "name": "050825_WestCoastSwing_MonkeyBar_03688_03689_1"
+    },
+    "012": {
+      "name": "050825_WestCoastSwing_OneFootSpin_03688_03689_1"
+    },
+    "013": {
+      "name": "050825_WestCoastSwing_Rides_03688_03689_1_1"
+    },
+    "014": {
+      "name": "050825_WestCoastSwing_SlingShot_03688_03689_1"
+    },
+    "015": {
+      "name": "050825_WestCoastSwing_SugarPush_03688_03689_1"
+    },
+    "016": {
+      "name": "050825_WestCoastSwing_SugarTuck_03688_03689_1"
+    },
+    "017": {
+      "name": "050825_WestCoastSwing_Telemark_03688_03689_1"
+    },
+    "018": {
+      "name": "050825_WestCoastSwing_UnderArmTurn_03688_03689_1"
+    }
+  },
+  "cams": [
+    "IOI_01",
+    "IOI_02",
+    "IOI_03",
+    "IOI_04",
+    "IOI_05",
+    "IOI_06",
+    "IOI_07",
+    "IOI_08",
+    "IOI_09",
+    "IOI_10",
+    "IOI_11",
+    "IOI_12",
+    "IOI_13",
+    "IOI_14",
+    "IOI_15",
+    "IOI_16",
+    "IOI_17",
+    "IOI_18",
+    "IOI_19",
+    "IOI_20",
+    "IOI_21",
+    "IOI_22",
+    "IOI_23",
+    "IOI_24",
+    "IOI_25",
+    "IOI_26",
+    "IOI_27",
+    "IOI_28",
+    "IOI_29",
+    "IOI_30",
+    "IOI_31",
+    "IOI_32"
+  ]
+}

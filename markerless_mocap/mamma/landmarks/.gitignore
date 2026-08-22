@@ -1,0 +1,14 @@
+wandb
+**/__pycache__
+.env
+datasets/*
+checkpoints
+experiments
+out*
+.vscode
+tmp*
+bedlam_data
+downsample_mat_smplx.pkl
+assets/verts_512.pkl
+test
+eval_datasets
