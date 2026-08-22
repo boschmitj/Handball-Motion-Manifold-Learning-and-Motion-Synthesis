@@ -45,11 +45,23 @@ GROUP_WEIGHTS_HEIGHT_FOCUS: dict[str, float] = {
     "acceleration": 0.25,
 }
 
+BEST_RANDOM_WEIGHTS_CURRENT: dict[str, float] = {
+    "release_speed": 3.122191774027964,
+    "release_angles": 0.48649669239408283,
+    "release_height": 4.239295961166828,
+    "relative_trajectory": 0.1734364062696802,
+    "velocity_evolution": 0.7678062523986564,
+    "trajectory_angles": 0.2854078774284084,
+    "acceleration": 0.1348043190299895,
+    "absolute_por": 5.790560717284391
+}
+
 # Add new named configurations here. They automatically become valid
 # --weight-preset choices and are included, with values, in --help.
 PREDEFINED_WEIGHT_SETS: dict[str, dict[str, float]] = {
     "default": DEFAULT_GROUP_WEIGHTS,
     "height_focus": GROUP_WEIGHTS_HEIGHT_FOCUS,
+    "best_random" : BEST_RANDOM_WEIGHTS_CURRENT,
 }
 
 ANGLE_GROUPS = {"release_angles", "trajectory_angles"}
@@ -177,27 +189,9 @@ class WeightedKNNRetriever:
         rows: list[dict[str, object]] = []
 
         for _, mrow in mocap.iterrows():
-            numerator = np.zeros(len(self.league), dtype=float)
-            denominator = np.zeros(len(self.league), dtype=float)
-            group_numerators = {
-                group: np.zeros(len(self.league), dtype=float) for group in self.group_weights
-            }
-            group_denominators = {
-                group: np.zeros(len(self.league), dtype=float) for group in self.group_weights
-            }
-            for spec in specs:
-                mvalue = pd.to_numeric(pd.Series([mrow[spec.name]]), errors="coerce").iloc[0]
-                if not np.isfinite(mvalue):
-                    continue
-                lvalues = pd.to_numeric(self.league[spec.name], errors="coerce").to_numpy(float)
-                valid = np.isfinite(lvalues)
-                difference = (circular_difference_degrees(lvalues, mvalue)
-                              if spec.angular else lvalues - mvalue)
-                term = spec.weight * np.square(difference / spec.scale)
-                numerator[valid] += term[valid]
-                denominator[valid] += spec.weight
-                group_numerators[spec.group][valid] += term[valid]
-                group_denominators[spec.group][valid] += spec.weight
+            components = self.distance_components(mrow, specs=specs)
+            numerator = components.pop("_numerator")
+            denominator = components.pop("_denominator")
 
             distances = np.divide(numerator, denominator, out=np.full_like(numerator, np.inf),
                                   where=denominator > 0)
@@ -217,17 +211,65 @@ class WeightedKNNRetriever:
                     ),
                 }
                 for group in self.group_weights:
-                    gd = group_denominators[group][idx]
-                    result[f"{group}_distance"] = (
-                        group_numerators[group][idx] / gd if gd > 0 else np.nan
-                    )
+                    result[f"{group}_distance"] = components[group][idx]
                     # Additive contribution; these sum exactly to total_distance.
                     result[f"{group}_contribution"] = (
-                        group_numerators[group][idx] / denominator[idx]
+                        components[f"_{group}_numerator"][idx] / denominator[idx]
                         if denominator[idx] > 0 else np.nan
                     )
                 rows.append(result)
         return pd.DataFrame(rows)
+
+    def distance_components(
+        self, query: pd.Series, *, specs: Sequence[FeatureSpec] | None = None,
+    ) -> dict[str, np.ndarray]:
+        """Return the baseline's normalized distances to every League row.
+
+        This is the single shared calculation used by both manual retrieval and
+        learned ranking.  Private numerator entries support the legacy additive
+        contribution columns; callers should consume the public group names and
+        ``z_trajectory`` diagnostic component.
+        """
+        if self.league is None:
+            raise RuntimeError("Call fit() before computing distance components")
+        selected = list(specs) if specs is not None else [
+            spec for spec in self.feature_specs if spec.name in query.index
+        ]
+        size = len(self.league)
+        total_num = np.zeros(size, dtype=float)
+        total_den = np.zeros(size, dtype=float)
+        numerators = {group: np.zeros(size) for group in self.group_weights}
+        denominators = {group: np.zeros(size) for group in self.group_weights}
+        z_num, z_den = np.zeros(size), np.zeros(size)
+        for spec in selected:
+            qvalue = pd.to_numeric(pd.Series([query.get(spec.name)]), errors="coerce").iloc[0]
+            if not np.isfinite(qvalue):
+                continue
+            values = pd.to_numeric(self.league[spec.name], errors="coerce").to_numpy(float)
+            valid = np.isfinite(values)
+            difference = (circular_difference_degrees(values, qvalue)
+                          if spec.angular else values - qvalue)
+            term = spec.weight * np.square(difference / spec.scale)
+            total_num[valid] += term[valid]
+            total_den[valid] += spec.weight
+            numerators[spec.group][valid] += term[valid]
+            denominators[spec.group][valid] += spec.weight
+            if re.fullmatch(r"disp_z_t\d+ms", spec.name, flags=re.IGNORECASE):
+                z_num[valid] += term[valid]
+                z_den[valid] += spec.weight
+        result: dict[str, np.ndarray] = {
+            "_numerator": total_num, "_denominator": total_den,
+        }
+        for group in self.group_weights:
+            result[group] = np.divide(
+                numerators[group], denominators[group], out=np.full(size, np.nan),
+                where=denominators[group] > 0,
+            )
+            result[f"_{group}_numerator"] = numerators[group]
+        result["z_trajectory"] = np.divide(
+            z_num, z_den, out=np.full(size, np.nan), where=z_den > 0,
+        )
+        return result
 
 
 def read_feature_csv(path: Path) -> pd.DataFrame:

@@ -171,14 +171,51 @@ def test_csv_export_uses_selected_rank_and_reports_translation(tmp_path: Path) -
         {"mocap_throw_id": "M01", "rank": 1, "league_throw_id": "L01"},
         {"mocap_throw_id": "M01", "rank": 2, "league_throw_id": "L01"},
     ])
-    assert reconstruct_matches(matches_path, league_path, mocap_path, output) == 1
+    assert reconstruct_matches(matches_path, league_path, mocap_path, output, rank=1) == 1
     with output.open(newline="", encoding="utf-8") as handle:
         row = next(csv.DictReader(handle))
     assert row["mocap_throw_id"] == "M01" and row["league_throw_id"] == "L01"
+    assert row["match_rank"] == "1"
     assert math.isclose(float(row["translation_x_m"]), 11.6)
     assert "bounce_reconstruction_rmse_m" in row
     assert "bounce_reconstruction_max_error_m" in row
     assert json.loads(row["trajectory_json"])[-1]["t_since_ms"] == 100
+
+
+def test_csv_export_reconstructs_all_match_ranks_by_default(tmp_path: Path) -> None:
+    trajectory = json.dumps([
+        _point(0, 0, 0, 0), _point(50, 1, 0, 0.1), _point(100, 2, 0, 0.15),
+    ])
+
+    def write(path: Path, fields: list[str], rows: list[dict]) -> None:
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(rows)
+
+    league_path, mocap_path, matches_path, output = (
+        tmp_path / name for name in ("league.csv", "mocap.csv", "matches.csv", "out.csv")
+    )
+    raw_fields = ["throw_id", "por_x_m", "por_y_m", "por_z_m", "trajectory_json"]
+    write(league_path, raw_fields, [
+        {"throw_id": f"L{rank}", "por_x_m": 1, "por_y_m": 2, "por_z_m": 3,
+         "trajectory_json": trajectory}
+        for rank in range(1, 6)
+    ])
+    write(mocap_path, raw_fields, [
+        {"throw_id": "M01", "por_x_m": 12.6, "por_y_m": -0.2, "por_z_m": 1.8,
+         "trajectory_json": trajectory},
+    ])
+    write(matches_path, ["mocap_throw_id", "rank", "league_throw_id"], [
+        {"mocap_throw_id": "M01", "rank": rank, "league_throw_id": f"L{rank}"}
+        for rank in range(1, 6)
+    ])
+
+    assert reconstruct_matches(matches_path, league_path, mocap_path, output) == 5
+    with output.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [int(row["match_rank"]) for row in rows] == [1, 2, 3, 4, 5]
+    assert [row["league_throw_id"] for row in rows] == ["L1", "L2", "L3", "L4", "L5"]
 
 
 def test_semicolon_csv_with_large_json_field_is_read_completely(tmp_path: Path) -> None:

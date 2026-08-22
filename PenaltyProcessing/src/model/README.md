@@ -25,6 +25,25 @@ python -m src.model.weighted_knn --weight-preset height_focus
 new entry to `PREDEFINED_WEIGHT_SETS` in `weighted_knn.py` to expose another
 preset automatically.
 
+## Learned pairwise ranker
+
+The learned ranker learns a softmax-normalized, non-negative budget over the
+same League-normalized distance groups while retaining the manual baseline:
+
+```bash
+python -m src.ranking.evaluate_ranker \
+  --league out/throw_features/features_league.csv \
+  --mocap out/throw_features/features_mocap.csv \
+  --output-dir out/learned_ranker --weight-preset best_random --seed 7 -k 5
+```
+
+It exports `learned_weights.json`, `metrics.json`, and learned/manual candidate
+CSVs over identical queries and candidate pools. The learned CSV includes every
+distance component. Passing `--manual-relevance judgments.csv` computes NDCG;
+the CSV needs `mocap_throw_id`, `league_throw_id`, and relevance from 0 to 3.
+The ranking CLIs use `best_random` by default. Pass `--weight-preset default`
+or `--weight-preset height_focus` to use another predefined manual weight set.
+
 Run a reproducible randomized weight search:
 
 ```bash

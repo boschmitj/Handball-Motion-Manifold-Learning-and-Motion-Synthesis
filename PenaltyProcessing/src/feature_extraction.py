@@ -110,6 +110,9 @@ def extract_features_from_row(row: pd.Series) -> Dict[str, Any]:
     features: Dict[str, Any] = {
         "throw_id": row.get("throw_id"),
         "source": row.get("source"),
+        # Retrieval metadata (never selected as numeric distance features).
+        "throw_type": row.get("throw_type"),
+        "is_bounce": row.get("is_bounce", row.get("bounce_detected")),
         # Primary release features
         "release_speed_m_s": row.get("release_speed_m_s"),
         "release_direction_deg": row.get("release_direction_deg"),

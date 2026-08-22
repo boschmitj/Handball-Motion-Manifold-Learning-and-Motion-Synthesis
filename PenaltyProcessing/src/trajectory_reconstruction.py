@@ -612,13 +612,14 @@ def reconstruct_league_continuation(
 
 def reconstruct_matches(
     matches_csv: str | Path, raw_league_csv: str | Path, raw_mocap_csv: str | Path,
-    output_csv: str | Path, *, target_hz: float = 300.0, rank: int = 1, ground_z: float = 0.095,
+    output_csv: str | Path, *, target_hz: float = 300.0, rank: int | None = None,
+    ground_z: float = 0.095,
     weight_run_id: int | None = None, weight_set: Mapping[str, float] | None = None,
 ) -> int:
     matches, _ = _read_csv(Path(matches_csv))
     output_path = Path(output_csv)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = ["mocap_throw_id", "league_throw_id", "weight_run_id", "weights_json",
+    fieldnames = ["mocap_throw_id", "match_rank", "league_throw_id", "weight_run_id", "weights_json",
                   "target_sampling_rate_hz",
                   "translation_x_m", "translation_y_m", "translation_z_m", "z_alignment_mode",
                   "bounce_detected", "bounce_time_ms", "bounce_x_m", "bounce_y_m", "bounce_z_m",
@@ -630,7 +631,8 @@ def reconstruct_matches(
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for match in matches:
-            if int(float(match.get("rank", 1))) != rank:
+            match_rank = int(float(match.get("rank", 1)))
+            if rank is not None and match_rank != rank:
                 continue
             league = load_raw_throw(raw_league_csv, match["league_throw_id"])
             mocap = load_raw_throw(raw_mocap_csv, match["mocap_throw_id"])
@@ -641,6 +643,7 @@ def reconstruct_matches(
             bounce_point = next((p for p in reconstructed if p.get("event") == "bounce"), None)
             writer.writerow({
                 "mocap_throw_id": match["mocap_throw_id"],
+                "match_rank": match_rank,
                 "league_throw_id": match["league_throw_id"],
                 "weight_run_id": "" if weight_run_id is None else weight_run_id,
                 "weights_json": "" if weight_set is None else json.dumps(weight_set, sort_keys=True),
@@ -766,7 +769,10 @@ def main() -> int:
     parser.add_argument("--raw-mocap", type=Path, default=throw_features / "raw_mocap.csv")
     parser.add_argument("--output", type=Path, default=base / "reconstructed_matched_trajectories.csv")
     parser.add_argument("--target-hz", type=float, default=300.0)
-    parser.add_argument("--rank", type=int, default=1)
+    parser.add_argument(
+        "--rank", type=int,
+        help="reconstruct only this neighbor rank (default: reconstruct every match row)",
+    )
     parser.add_argument("--ground-z", type=float, default=0.095,
                         help="ball-centre height at ground contact in metres (default: 0.095)")
     args = parser.parse_args()
