@@ -11,6 +11,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 from ball_trajectory import BallPoint
 from release_detector_trajectory_based import (
     ProjectileModel,
+    _has_vertical_turn_in_release_zone,
     _has_strong_direction_change,
     _has_deflection,
     detect_backward_projectile_segment,
@@ -68,7 +69,9 @@ def test_select_release_index_prefers_projectile_segment() -> None:
 
     idx = select_release_index(points, 0, len(points) - 1)
     assert idx is not None
-    assert idx == 3, f"expected the release index near 3, got {idx}"
+    # The fitted parabola has its apex immediately after index 3 inside the
+    # protected 6--7.5 m release band, so the vertical-turn guard postpones it.
+    assert idx == 4, f"expected release after the in-zone vertical turn, got {idx}"
 
 
 def test_select_release_index_uses_earliest_stable_projectile_segment() -> None:
@@ -154,6 +157,39 @@ def test_backward_segment_uses_real_timestamps_and_stops_at_transition() -> None
     before = np.asarray((points[2].x, points[2].y, points[2].z))
     after = np.asarray((points[3].x, points[3].y, points[3].z))
     assert abs(np.linalg.norm(solved_point - before) - np.linalg.norm(solved_point - after)) < 1e-9
+
+
+def test_vertical_turn_in_release_zone_rejects_hand_carried_parabola() -> None:
+    base = datetime(2024, 1, 1, 12, 0, 0)
+    points = [make_point(base, 11.5, 3.0, 0.0, 0.0)]
+    # This entire segment is a perfect parabola and would previously be pulled
+    # back to index 1, despite its in-zone rise-then-fall being hand motion.
+    for i in range(9):
+        t = 0.05 * i
+        points.append(make_point(
+            base + timedelta(milliseconds=50 * (i + 1)),
+            12.5 + 8.0*t,
+            1.4 + 3.0*t - 15.0*t*t,
+            0.0,
+            0.0,
+        ))
+
+    assert _has_vertical_turn_in_release_zone(points, 1, 5) is True
+    guarded = detect_backward_projectile_segment(points, 0, len(points) - 1)
+    unguarded = detect_backward_projectile_segment(
+        points, 0, len(points) - 1, reject_vertical_turn_near_release=False,
+    )
+    assert guarded is not None and unguarded is not None
+    assert guarded["first_projectile_idx"] > unguarded["first_projectile_idx"]
+
+
+def test_vertical_turn_guard_ignores_small_height_jitter() -> None:
+    base = datetime(2024, 1, 1, 12, 0, 0)
+    points = [
+        make_point(base + timedelta(milliseconds=50*i), 12.5 + 0.3*i, z, 0.0, 0.0)
+        for i, z in enumerate([1.40, 1.42, 1.405, 1.425, 1.41, 1.43])
+    ]
+    assert _has_vertical_turn_in_release_zone(points, 0, len(points) - 1) is False
 
 
 def test_find_bounce_idx_searches_backward_in_goal_zone() -> None:
