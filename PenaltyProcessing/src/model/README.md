@@ -61,6 +61,28 @@ component retains at least `--minimum-weight`. Real-query output also reports
 trajectory point counts, overlap/evidence ratios, `ranking_confidence`, and
 whether each candidate passed the configured minimum overlap.
 
+## Blinded manual annotation
+
+The terminal annotation tool merges and deduplicates the top-k manual and
+learned candidates, reconstructs each actual stitched continuation, and hides
+model provenance, rank, score, and the real candidate IDs while rating:
+
+```bash
+conda run -n handball3d python -m src.ranking.manual_annotation_tool \
+  --mocap out/throw_features/raw_mocap.csv \
+  --league out/throw_features/raw_league.csv \
+  --knn-results out/throw_features/learned_ranker/manual_ranked_candidates.csv \
+  --ranker-results out/throw_features/learned_ranker/learned_ranked_candidates.csv \
+  --output out/throw_features/manual_relevance_annotations.csv \
+  --top-k 10 --seed 42 --subratings
+```
+
+Enter all six ratings on one line (`overall speed direction trajectory
+vertical throw_type`), or pass `--no-subratings` to collect only overall
+relevance. `q` quits, `b` edits the previous annotation, and `s` defers the
+current pair. Every action is saved atomically. Existing completed pairs and
+the persisted presentation order are retained when the command is restarted.
+
 Run a reproducible randomized weight search:
 
 ```bash
