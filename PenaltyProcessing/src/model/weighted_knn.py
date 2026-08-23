@@ -209,6 +209,14 @@ class WeightedKNNRetriever:
                         and np.isfinite(pd.to_numeric(
                             pd.Series([self.league.iloc[idx][s.name]]), errors="coerce").iloc[0])
                     ),
+                    "trajectory_common_point_count": int(
+                        components["trajectory_common_point_count"][idx]
+                    ),
+                    "trajectory_query_point_count": int(
+                        components["trajectory_query_point_count"][idx]
+                    ),
+                    "trajectory_overlap_ratio": components["trajectory_overlap_ratio"][idx],
+                    "trajectory_evidence_ratio": components["trajectory_evidence_ratio"][idx],
                 }
                 for group in self.group_weights:
                     result[f"{group}_distance"] = components[group][idx]
@@ -241,6 +249,24 @@ class WeightedKNNRetriever:
         numerators = {group: np.zeros(size) for group in self.group_weights}
         denominators = {group: np.zeros(size) for group in self.group_weights}
         z_num, z_den = np.zeros(size), np.zeros(size)
+        # Count elapsed-time points using disp_x only, avoiding counting the
+        # multiple coordinates/kinematic values at one time as independent
+        # observations. These diagnostics make truncated-query confidence and
+        # candidate coverage explicit.
+        trajectory_time_names = [
+            name for name in self.league.columns
+            if name in query.index
+            and re.fullmatch(r"disp_x_t\d+ms", name, flags=re.IGNORECASE)
+        ]
+        query_trajectory_count = 0
+        common_trajectory_count = np.zeros(size, dtype=float)
+        for name in trajectory_time_names:
+            qvalue = pd.to_numeric(pd.Series([query.get(name)]), errors="coerce").iloc[0]
+            if not np.isfinite(qvalue):
+                continue
+            query_trajectory_count += 1
+            values = pd.to_numeric(self.league[name], errors="coerce").to_numpy(float)
+            common_trajectory_count[np.isfinite(values)] += 1.0
         for spec in selected:
             qvalue = pd.to_numeric(pd.Series([query.get(spec.name)]), errors="coerce").iloc[0]
             if not np.isfinite(qvalue):
@@ -269,6 +295,19 @@ class WeightedKNNRetriever:
         result["z_trajectory"] = np.divide(
             z_num, z_den, out=np.full(size, np.nan), where=z_den > 0,
         )
+        query_counts = np.full(size, float(query_trajectory_count))
+        overlap = np.divide(
+            common_trajectory_count, query_counts, out=np.zeros(size),
+            where=query_counts > 0,
+        )
+        possible_count = len(trajectory_time_names)
+        evidence = (float(query_trajectory_count) / possible_count
+                    if possible_count else 0.0)
+        result["trajectory_common_point_count"] = common_trajectory_count
+        result["trajectory_query_point_count"] = query_counts
+        result["trajectory_overlap_ratio"] = overlap
+        result["trajectory_evidence_ratio"] = np.full(size, evidence)
+        result["trajectory_coverage"] = 1.0 - overlap
         return result
 
 

@@ -39,35 +39,84 @@ def retrieval_metrics(ranks: list[int]) -> dict[str, float]:
 
 
 def rank_queries(model: LinearPairwiseRanker, retriever: WeightedKNNRetriever,
-                 queries: pd.DataFrame, *, k: int | None = None) -> pd.DataFrame:
+                 queries: pd.DataFrame, *, k: int | None = None,
+                 minimum_common_trajectory_points: int = 2,
+                 minimum_overlap_ratio: float = .5) -> pd.DataFrame:
     league_ids = retriever.league[retriever.id_column].to_numpy()  # type: ignore[index]
     query_id = next(c for c in ("throw_id", "mocap_throw_id", "league_throw_id") if c in queries)
     rows = []
     for _, query in queries.iterrows():
         matrix, names = component_matrix(retriever, query)
-        scores = model.score(matrix)
-        order = np.argsort(scores, kind="stable")[:k]
+        matrix = align_component_matrix(matrix, names, model.feature_names)
+        scores = np.asarray(model.score(matrix), float)
+        diagnostics = retriever.distance_components(query)
+        common = diagnostics["trajectory_common_point_count"]
+        query_count = diagnostics["trajectory_query_point_count"]
+        overlap = diagnostics["trajectory_overlap_ratio"]
+        evidence = diagnostics["trajectory_evidence_ratio"]
+        # A query with less evidence than requested cannot satisfy the literal
+        # threshold; require all of its available points instead. This retains
+        # a ranking while making its low confidence explicit.
+        required_points = np.minimum(minimum_common_trajectory_points, query_count)
+        eligible = ((common >= required_points) & (overlap >= minimum_overlap_ratio))
+        if np.any(eligible):
+            eligible_indices = np.flatnonzero(eligible)
+            order = eligible_indices[np.argsort(scores[eligible_indices], kind="stable")][:k]
+        else:
+            # Preserve a diagnostic fallback instead of returning no rows. All
+            # returned candidates are explicitly marked below as failing the
+            # configured overlap requirement.
+            order = np.argsort(scores, kind="stable")[:k]
         for rank, index in enumerate(order, 1):
             row = {"mocap_throw_id": query[query_id], "rank": rank,
-                   "league_throw_id": league_ids[index], "learned_distance": scores[index]}
-            row.update({f"{name}_distance": matrix[index, j] for j, name in enumerate(names)})
+                   "league_throw_id": league_ids[index], "learned_distance": scores[index],
+                   "trajectory_common_point_count": int(common[index]),
+                   "trajectory_query_point_count": int(query_count[index]),
+                   "trajectory_overlap_ratio": float(overlap[index]),
+                   "trajectory_evidence_ratio": float(evidence[index]),
+                   "ranking_confidence": float(overlap[index] * evidence[index]),
+                   "meets_minimum_overlap": bool(eligible[index])}
+            row.update({f"{name}_distance": matrix[index, j]
+                        for j, name in enumerate(model.feature_names)})
             rows.append(row)
     return pd.DataFrame(rows)
 
 
+def align_component_matrix(
+    matrix: np.ndarray, available_names: list[str], required_names: list[str],
+) -> np.ndarray:
+    """Select/reorder components, preserving compatibility with old models."""
+    missing = [name for name in required_names if name not in available_names]
+    if missing:
+        raise ValueError(f"Ranker requires unavailable components: {missing}")
+    indices = [available_names.index(name) for name in required_names]
+    return matrix[:, indices]
+
+
 def evaluate_synthetic(model: LinearPairwiseRanker, retriever: WeightedKNNRetriever,
                        split: RankingSplit) -> dict[str, float]:
+    return retrieval_metrics(synthetic_ranks(model, retriever, split).tolist())
+
+
+def synthetic_ranks(model: LinearPairwiseRanker, retriever: WeightedKNNRetriever,
+                    split: RankingSplit) -> np.ndarray:
     league_ids = retriever.league[retriever.id_column].to_numpy()  # type: ignore[index]
     ranks = []
     for (_, query), source_id in zip(split.queries.iterrows(), split.source_ids):
-        matrix, _ = component_matrix(retriever, query)
+        matrix, names = component_matrix(retriever, query)
+        matrix = align_component_matrix(matrix, names, model.feature_names)
         order = np.argsort(model.score(matrix), kind="stable")
         ranks.append(int(np.flatnonzero(league_ids[order] == source_id)[0]) + 1)
-    return retrieval_metrics(ranks)
+    return np.asarray(ranks, dtype=int)
 
 
 def evaluate_manual_synthetic(retriever: WeightedKNNRetriever,
                               split: RankingSplit) -> dict[str, float]:
+    return retrieval_metrics(manual_synthetic_ranks(retriever, split).tolist())
+
+
+def manual_synthetic_ranks(retriever: WeightedKNNRetriever,
+                           split: RankingSplit) -> np.ndarray:
     league_ids = retriever.league[retriever.id_column].to_numpy()  # type: ignore[index]
     ranks = []
     for (_, query), source_id in zip(split.queries.iterrows(), split.source_ids):
@@ -79,7 +128,7 @@ def evaluate_manual_synthetic(retriever: WeightedKNNRetriever,
         )
         order = np.argsort(distances, kind="stable")
         ranks.append(int(np.flatnonzero(league_ids[order] == source_id)[0]) + 1)
-    return retrieval_metrics(ranks)
+    return np.asarray(ranks, dtype=int)
 
 
 def load_ranking_dataset(
@@ -176,8 +225,29 @@ def main() -> int:
               "(default: best_random)"),
     )
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--regularization-grid", default="0,0.01,0.1,1,10",
+        help="Comma-separated L2 strengths selected by validation pairwise loss",
+    )
+    parser.add_argument(
+        "--minimum-weight", type=float, default=.01,
+        help="Floor for every component budget (default: 0.01)",
+    )
+    parser.add_argument(
+        "--minimum-common-trajectory-points", type=int, default=2,
+        help="Minimum shared elapsed-time points for real-query candidates",
+    )
+    parser.add_argument(
+        "--minimum-overlap-ratio", type=float, default=.5,
+        help="Minimum fraction of observed query points covered by a candidate",
+    )
     parser.add_argument("-k", type=int, default=5)
     args = parser.parse_args()
+
+    if args.minimum_common_trajectory_points < 0:
+        parser.error("--minimum-common-trajectory-points must be non-negative")
+    if not 0.0 <= args.minimum_overlap_ratio <= 1.0:
+        parser.error("--minimum-overlap-ratio must be between zero and one")
 
     league = read_feature_csv(args.league)
     retriever = WeightedKNNRetriever(PREDEFINED_WEIGHT_SETS[args.weight_preset]).fit(league)
@@ -195,23 +265,72 @@ def main() -> int:
             random_negatives=args.random_negatives, seed=args.seed,
         ) for name, split in splits.items()}
         names = BASE_COMPONENTS + INTERACTIONS
-    model = LinearPairwiseRanker(names)
-    initial_loss = model.pairwise_loss(*pairs["train"])
-    model.fit(*pairs["train"])
+    regularization_grid = [
+        float(value) for value in args.regularization_grid.split(",") if value.strip()
+    ]
+    if not regularization_grid or any(
+        not np.isfinite(value) or value < 0 for value in regularization_grid
+    ):
+        parser.error("--regularization-grid needs non-negative finite values")
+    initial_model = LinearPairwiseRanker(names, minimum_weight=args.minimum_weight)
+    initial_loss = initial_model.pairwise_loss(*pairs["train"])
+    candidates: list[tuple[float, float, LinearPairwiseRanker]] = []
+    selection_pairs = (pairs["validation"] if len(pairs["validation"][0])
+                       else pairs["train"])
+    for strength in regularization_grid:
+        candidate = LinearPairwiseRanker(
+            names, regularization_strength=strength,
+            minimum_weight=args.minimum_weight,
+        ).fit(*pairs["train"])
+        validation_loss = candidate.pairwise_loss(*selection_pairs)
+        candidates.append((validation_loss, strength, candidate))
+    validation_loss, selected_strength, model = min(
+        candidates, key=lambda item: (item[0], item[1]),
+    )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     model.save(args.output_dir / "learned_weights.json")
-    metrics: dict[str, object] = {"train_pairwise_loss_before": initial_loss}
+    metrics: dict[str, object] = {
+        "train_pairwise_loss_before": initial_loss,
+        "selected_regularization_strength": selected_strength,
+        "minimum_component_weight": args.minimum_weight,
+        "regularization_candidates": [
+            {"strength": strength, "validation_pairwise_loss": loss}
+            for loss, strength, _ in candidates
+        ],
+    }
     for name, split in splits.items():
         metrics[f"{name}_pairwise_loss"] = model.pairwise_loss(*pairs[name]) if len(pairs[name][0]) else np.nan
-        metrics.update({f"learned_{name}_{key}": value
-                        for key, value in evaluate_synthetic(model, retriever, split).items()})
-        metrics.update({f"manual_{name}_{key}": value
-                        for key, value in evaluate_manual_synthetic(retriever, split).items()})
+        learned_ranks = synthetic_ranks(model, retriever, split)
+        manual_ranks = manual_synthetic_ranks(retriever, split)
+        metrics.update({f"learned_{name}_{key}": value for key, value in
+                        retrieval_metrics(learned_ranks.tolist()).items()})
+        metrics.update({f"manual_{name}_{key}": value for key, value in
+                        retrieval_metrics(manual_ranks.tolist()).items()})
+        if "augmentation_severity" in split.queries:
+            severities = split.queries["augmentation_severity"].astype(str).to_numpy()
+            for severity in sorted(set(severities)):
+                selected = severities == severity
+                metrics.update({
+                    f"learned_{name}_{severity}_{key}": value
+                    for key, value in retrieval_metrics(
+                        learned_ranks[selected].tolist()
+                    ).items()
+                })
+                metrics.update({
+                    f"manual_{name}_{severity}_{key}": value
+                    for key, value in retrieval_metrics(
+                        manual_ranks[selected].tolist()
+                    ).items()
+                })
 
     if args.mocap.exists():
         mocap = read_feature_csv(args.mocap)
-        learned = rank_queries(model, retriever, mocap, k=args.k)
+        learned = rank_queries(
+            model, retriever, mocap, k=args.k,
+            minimum_common_trajectory_points=args.minimum_common_trajectory_points,
+            minimum_overlap_ratio=args.minimum_overlap_ratio,
+        )
         manual = retriever.retrieve(mocap, k=args.k)
         learned.to_csv(args.output_dir / "learned_ranked_candidates.csv", index=False)
         manual.to_csv(args.output_dir / "manual_ranked_candidates.csv", index=False)

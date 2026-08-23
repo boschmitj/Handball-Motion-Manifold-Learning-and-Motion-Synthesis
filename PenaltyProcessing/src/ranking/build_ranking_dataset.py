@@ -29,7 +29,7 @@ except ModuleNotFoundError as error:
         ID_CANDIDATES, PREDEFINED_WEIGHT_SETS, WeightedKNNRetriever, read_feature_csv,
     )
 
-BASE_COMPONENTS = list(WeightedKNNRetriever().group_weights)
+BASE_COMPONENTS = list(WeightedKNNRetriever().group_weights) + ["trajectory_coverage"]
 INTERACTIONS = ["bounce_release_height", "bounce_z_trajectory"]
 logger = logging.getLogger("build_ranking_dataset")
 
@@ -49,6 +49,42 @@ def setup_logging(verbose: bool = False) -> None:
 class RankingSplit:
     queries: pd.DataFrame
     source_ids: np.ndarray
+
+
+@dataclass(frozen=True)
+class PerturbationProfile:
+    """One configured severity level for synthetic domain corruption."""
+
+    yaw_std_deg: float
+    horizontal_scale_std: float
+    vertical_scale_std: float
+    endpoint_offset_std_m: tuple[float, float, float]
+    curved_offset_std_m: tuple[float, float, float]
+    por_noise_std_m: float
+    measurement_noise_std_m: float
+    smoothing_strength: float
+    point_dropout_probability: float
+    burst_dropout_probability: float
+    prefix_truncation_probability: float
+    prefix_fraction_range: tuple[float, float]
+    time_phase_std_ms: float
+
+
+PERTURBATION_PROFILES: dict[str, PerturbationProfile] = {
+    "mild": PerturbationProfile(
+        2.0, .04, .025, (.05, .05, .02), (.04, .04, .02),
+        .03, .005, .05, .04, .15, .25, (.70, .95), 1.5,
+    ),
+    "medium": PerturbationProfile(
+        5.0, .08, .05, (.10, .10, .04), (.08, .08, .04),
+        .06, .015, .15, .08, .40, .60, (.45, .90), 2.5,
+    ),
+    "severe": PerturbationProfile(
+        8.0, .12, .08, (.18, .18, .08), (.14, .14, .07),
+        .10, .030, .25, .12, .65, .85, (.30, .75), 4.0,
+    ),
+}
+DEFAULT_SEVERITY_MIX = {"mild": .35, "medium": .40, "severe": .25}
 
 
 def split_source_ids(ids: np.ndarray, *, seed: int = 0,
@@ -151,9 +187,24 @@ def _recompute_kinematics(positions: np.ndarray, times_s: np.ndarray) -> dict[st
     }
 
 
-def perturb_raw_throw(row: pd.Series, rng: np.random.Generator) -> pd.Series:
-    """Perturb a complete path, then derive every kinematic value from that path."""
+def perturb_raw_throw(
+    row: pd.Series, rng: np.random.Generator, *, severity: str | None = None,
+) -> pd.Series:
+    """Apply domain-realistic corruption, then recompute all kinematics.
+
+    Prefix truncation represents an unidentified ball or wall cutoff; burst
+    loss represents temporary tracking failure. The three severity profiles
+    deliberately include harder variants than the old single small-noise mode.
+    """
+    if severity is None:
+        severity = str(rng.choice(
+            list(DEFAULT_SEVERITY_MIX), p=list(DEFAULT_SEVERITY_MIX.values()),
+        ))
+    if severity not in PERTURBATION_PROFILES:
+        raise ValueError(f"Unknown perturbation severity: {severity}")
+    profile = PERTURBATION_PROFILES[severity]
     out = row.copy()
+    out["augmentation_severity"] = severity
     points = json.loads(row.get("trajectory_json", "[]") or "[]")
     if len(points) < 2:
         raise ValueError(f"Throw {row.get('throw_id')} has fewer than two trajectory points")
@@ -168,31 +219,69 @@ def perturb_raw_throw(row: pd.Series, rng: np.random.Generator) -> pd.Series:
     points = [point for point, keep in zip(points, valid) if keep]
     positions, times_s = positions[valid], times_s[valid]
 
-    # Remove complete samples so position and every derived value share the
-    # same missing-data pattern. Always retain the PoR and the final sample.
-    keep = rng.random(len(points)) >= .04
+    # Random prefixes explicitly train incomplete-observation behavior. Keep
+    # enough points to recompute release velocity even for severe variants.
+    if len(points) >= 4 and rng.random() < profile.prefix_truncation_probability:
+        low_fraction, high_fraction = profile.prefix_fraction_range
+        low_end = max(1, int(math.ceil((len(points) - 1) * low_fraction)))
+        high_end = max(low_end, int(math.floor((len(points) - 1) * high_fraction)))
+        end = int(rng.integers(low_end, high_end + 1))
+        points, positions, times_s = points[:end + 1], positions[:end + 1], times_s[:end + 1]
+
+    # Drop individual samples and, independently, one contiguous internal
+    # burst. PoR and the retained prefix endpoint remain available.
+    keep = rng.random(len(points)) >= profile.point_dropout_probability
     keep[0] = keep[-1] = True
+    if len(points) >= 5 and rng.random() < profile.burst_dropout_probability:
+        burst_start = int(rng.integers(1, len(points) - 2))
+        max_length = max(1, min(len(points) // 4, len(points) - burst_start - 1))
+        burst_length = int(rng.integers(1, max_length + 1))
+        keep[burst_start:burst_start + burst_length] = False
     if keep.sum() < 2:
         keep[:] = True
     points = [point for point, retain in zip(points, keep) if retain]
     positions, times_s = positions[keep], times_s[keep]
 
-    # A small yaw and axis scaling mimic calibration and speed differences.
-    yaw = math.radians(rng.normal(0.0, 2.0))
+    # Yaw and axis scaling mimic calibration and launch-speed differences.
+    yaw = math.radians(rng.normal(0.0, profile.yaw_std_deg))
     rotation = np.asarray([[math.cos(yaw), -math.sin(yaw)],
                            [math.sin(yaw), math.cos(yaw)]])
-    positions[:, :2] = (positions[:, :2] @ rotation.T) * rng.normal(1.0, .04)
-    vertical_scale = rng.normal(1.0, .025)
+    positions[:, :2] = ((positions[:, :2] @ rotation.T)
+                        * rng.normal(1.0, profile.horizontal_scale_std))
+    vertical_scale = rng.normal(1.0, profile.vertical_scale_std)
     positions[:, 2] *= vertical_scale
+
+    # A small sampling-phase error represents uncertainty in locating PoR
+    # between native frames while retaining a true t=0 anchor.
+    if len(times_s) > 1:
+        phase_shift_s = float(np.clip(
+            rng.normal(0.0, profile.time_phase_std_ms), -4.5, 4.5,
+        )) / 1000.0
+        times_s[1:] += phase_shift_s
 
     # Add smooth path deformation anchored at the PoR. Avoid vertical bending
     # for bounce throws so scaling preserves their ground-contact geometry.
     duration = max(times_s[-1] - times_s[0], 1e-6)
     phase = (times_s - times_s[0]) / duration
-    linear_offset = phase[:, None] * rng.normal(0.0, [.05, .05, .02], size=3)
-    curved_scale = np.asarray([.04, .04, 0.0 if is_bounce(row) else .02])
+    linear_offset = phase[:, None] * rng.normal(
+        0.0, profile.endpoint_offset_std_m, size=3,
+    )
+    curved_scale = np.asarray(profile.curved_offset_std_m)
+    if is_bounce(row):
+        curved_scale[2] = 0.0
     curved_offset = np.sin(np.pi * phase)[:, None] * rng.normal(0.0, curved_scale, size=3)
     positions += linear_offset + curved_offset
+
+    # Filtering changes derived velocity/acceleration, while residual marker
+    # noise ensures the augmentation is not merely a rigid transform.
+    if len(positions) >= 3 and profile.smoothing_strength > 0:
+        smoothed = positions.copy()
+        smoothed[1:-1] = (
+            positions[:-2] + 2.0 * positions[1:-1] + positions[2:]
+        ) / 4.0
+        positions = ((1.0 - profile.smoothing_strength) * positions
+                     + profile.smoothing_strength * smoothed)
+    positions += rng.normal(0.0, profile.measurement_noise_std_m, size=positions.shape)
     positions -= positions[0].copy()
 
     kinematics = _recompute_kinematics(positions, times_s)
@@ -201,10 +290,13 @@ def perturb_raw_throw(row: pd.Series, rng: np.random.Generator) -> pd.Series:
             point[axis] = float(value)
         for name, values in kinematics.items():
             point[name] = float(values[index]) if np.isfinite(values[index]) else None
+        point["t_since_ms"] = float((times_s[index] - times_s[0]) * 1000.0)
 
     por_z = float(row.get("por_z_m", row.get("release_height_m", 0.0))) * vertical_scale
-    out["por_x_m"] = float(row.get("por_x_m", 0.0)) + rng.normal(0.0, .03)
-    out["por_y_m"] = float(row.get("por_y_m", 0.0)) + rng.normal(0.0, .03)
+    out["por_x_m"] = (float(row.get("por_x_m", 0.0))
+                      + rng.normal(0.0, profile.por_noise_std_m))
+    out["por_y_m"] = (float(row.get("por_y_m", 0.0))
+                      + rng.normal(0.0, profile.por_noise_std_m))
     out["por_z_m"] = por_z
     out["release_height_m"] = por_z
     out["release_speed_m_s"] = kinematics["v"][0]
@@ -215,8 +307,10 @@ def perturb_raw_throw(row: pd.Series, rng: np.random.Generator) -> pd.Series:
     return out
 
 
-def build_synthetic_splits(league: pd.DataFrame, raw_league: pd.DataFrame, *,
-                           augmentations: int = 3, seed: int = 0) -> dict[str, RankingSplit]:
+def build_synthetic_splits(
+    league: pd.DataFrame, raw_league: pd.DataFrame, *, augmentations: int = 3,
+    seed: int = 0, severity_mix: dict[str, float] | None = None,
+) -> dict[str, RankingSplit]:
     id_col = next((c for c in ID_CANDIDATES if c in league), None)
     if id_col is None:
         raise ValueError("League data needs a throw ID")
@@ -228,6 +322,13 @@ def build_synthetic_splits(league: pd.DataFrame, raw_league: pd.DataFrame, *,
     if missing:
         raise ValueError(f"Raw League data is missing {len(missing)} feature-row IDs")
     rng = np.random.default_rng(seed)
+    mix = dict(DEFAULT_SEVERITY_MIX if severity_mix is None else severity_mix)
+    if set(mix) != set(PERTURBATION_PROFILES) or any(
+        not np.isfinite(value) or value < 0 for value in mix.values()
+    ) or not np.isclose(sum(mix.values()), 1.0):
+        raise ValueError(
+            f"severity_mix must provide {sorted(PERTURBATION_PROFILES)} and sum to one"
+        )
     partitions = split_source_ids(league[id_col].to_numpy(), seed=seed)
     result = {}
     for split, ids in partitions.items():
@@ -239,12 +340,14 @@ def build_synthetic_splits(league: pd.DataFrame, raw_league: pd.DataFrame, *,
         for source_id in ids:
             source = raw_by_id[str(source_id)]
             for aug in range(augmentations):
-                perturbed = perturb_raw_throw(source, rng)
+                severity = str(rng.choice(list(mix), p=list(mix.values())))
+                perturbed = perturb_raw_throw(source, rng, severity=severity)
                 query = pd.Series(extract_features_from_row(perturbed)).reindex(league.columns)
                 query[id_col] = f"synthetic_{source_id}_{aug}"
+                query["augmentation_severity"] = severity
                 rows.append(query)
                 sources.append(source_id)
-        result[split] = RankingSplit(pd.DataFrame(rows, columns=league.columns), np.asarray(sources))
+        result[split] = RankingSplit(pd.DataFrame(rows), np.asarray(sources))
         logger.info("Generated %d %s queries", len(rows), split)
     return result
 
@@ -305,6 +408,10 @@ def main() -> int:
     )
     parser.add_argument("--output-dir", type=Path, default=base / "throw_features" / "ranking_dataset")
     parser.add_argument("--augmentations", type=int, default=6)
+    parser.add_argument(
+        "--severity-mix", default="0.35,0.40,0.25", metavar="MILD,MEDIUM,SEVERE",
+        help="Synthetic perturbation mixture (default: 0.35,0.40,0.25)",
+    )
     parser.add_argument("--hard-negatives", type=int, default=12)
     parser.add_argument("--random-negatives", type=int, default=3)
     parser.add_argument(
@@ -334,8 +441,13 @@ def main() -> int:
         "Creating leakage-safe splits (augmentations=%d, seed=%d)",
         args.augmentations, args.seed,
     )
+    severity_values = [float(value) for value in args.severity_mix.split(",")]
+    if len(severity_values) != 3:
+        parser.error("--severity-mix needs three comma-separated probabilities")
+    severity_mix = dict(zip(PERTURBATION_PROFILES, severity_values))
     splits = build_synthetic_splits(
         league, raw_league, augmentations=args.augmentations, seed=args.seed,
+        severity_mix=severity_mix,
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     logger.info("Writing dataset to %s", args.output_dir)

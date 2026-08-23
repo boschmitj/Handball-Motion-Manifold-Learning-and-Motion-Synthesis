@@ -44,6 +44,12 @@ class WeightedKNNTests(unittest.TestCase):
         self.assertTrue(np.isfinite(result["total_distance"]).all())
         contributions = [c for c in result if c.endswith("_contribution")]
         np.testing.assert_allclose(result[contributions].sum(axis=1), result.total_distance)
+        near = result[result.league_throw_id == "near"].iloc[0]
+        missing = result[result.league_throw_id == "missing"].iloc[0]
+        self.assertEqual(near.trajectory_common_point_count, 1)
+        self.assertEqual(near.trajectory_overlap_ratio, 1.0)
+        self.assertEqual(near.trajectory_evidence_ratio, .5)
+        self.assertEqual(missing.trajectory_overlap_ratio, 0.0)
 
     def test_scales_are_fit_on_league_only(self):
         league = pd.DataFrame({"throw_id": [1, 2], "release_speed_m_s": [0.0, 2.0]})

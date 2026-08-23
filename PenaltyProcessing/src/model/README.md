@@ -3,7 +3,7 @@
 Run from `PenaltyProcessing`:
 
 ```bash
-conda run -n BA python -m src.model.weighted_knn \
+conda run -n handball3d python -m src.model.weighted_knn \
   --mocap out/throw_features/features_mocap.csv \
   --league out/throw_features/features_league.csv \
   --output out/throw_features/weighted_knn_matches.csv
@@ -28,13 +28,26 @@ preset automatically.
 ## Learned pairwise ranker
 
 The learned ranker learns a softmax-normalized, non-negative budget over the
-same League-normalized distance groups while retaining the manual baseline:
+same League-normalized distance groups while retaining the manual baseline.
+Regenerate its ranking dataset to include mixed-severity perturbations,
+prefix truncation, burst tracking loss, and the trajectory-coverage component:
 
 ```bash
-python -m src.ranking.evaluate_ranker \
+conda run -n handball3d python -m src.ranking.build_ranking_dataset \
+  --augmentations 6 --severity-mix 0.35,0.40,0.25 --seed 42
+```
+
+Then train and evaluate it:
+
+```bash
+conda run -n handball3d python -m src.ranking.evaluate_ranker \
   --league out/throw_features/features_league.csv \
   --mocap out/throw_features/features_mocap.csv \
-  --output-dir out/learned_ranker --weight-preset best_random --seed 7 -k 5
+  --dataset-dir out/throw_features/ranking_dataset \
+  --output-dir out/throw_features/learned_ranker \
+  --regularization-grid 0,0.01,0.1,1,10 --minimum-weight 0.01 \
+  --minimum-common-trajectory-points 2 --minimum-overlap-ratio 0.5 \
+  --weight-preset best_random --seed 7 -k 5
 ```
 
 It exports `learned_weights.json`, `metrics.json`, and learned/manual candidate
@@ -43,11 +56,15 @@ distance component. Passing `--manual-relevance judgments.csv` computes NDCG;
 the CSV needs `mocap_throw_id`, `league_throw_id`, and relevance from 0 to 3.
 The ranking CLIs use `best_random` by default. Pass `--weight-preset default`
 or `--weight-preset height_focus` to use another predefined manual weight set.
+The regularization strength is selected by validation pairwise loss, and every
+component retains at least `--minimum-weight`. Real-query output also reports
+trajectory point counts, overlap/evidence ratios, `ranking_confidence`, and
+whether each candidate passed the configured minimum overlap.
 
 Run a reproducible randomized weight search:
 
 ```bash
-python -m src.model.weighted_knn \
+conda run -n handball3d python -m src.model.weighted_knn \
   --mocap out/throw_features/features_mocap.csv \
   --league out/throw_features/features_league.csv \
   --random-weight-runs 100 \
