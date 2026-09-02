@@ -65,3 +65,5 @@ PenaltyProcessing/mocap_por/
 # Temporary files
 *.tmp
 /writing
+
+/PenaltyProcessing/mocap_files
