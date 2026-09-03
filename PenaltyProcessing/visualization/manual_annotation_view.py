@@ -26,7 +26,20 @@ def _diagnostic_text(values: Mapping[str, Any]) -> str:
         except (TypeError, ValueError):
             return str(raw)
 
-    return "\n".join((
+    reconstruction_error = values.get("reconstruction_error")
+    warning = []
+    if reconstruction_error not in (None, ""):
+        compact_error = " ".join(str(reconstruction_error).split())
+        if len(compact_error) > 220:
+            compact_error = compact_error[:217] + "..."
+        warning = [
+            "!!! RECONSTRUCTION ERROR !!!",
+            "Showing aligned measured League samples as fallback.",
+            compact_error,
+            "",
+        ]
+
+    return "\n".join((*warning,
         "Transition diagnostics",
         f"Mocap speed before PoR: {value('mocap_release_speed_m_s')} m/s",
         f"League speed after PoR: {value('league_release_speed_m_s')} m/s",
@@ -77,10 +90,18 @@ def render_annotation_figure(
         ax.plot(*pre_xyz.T, color="0.35", linewidth=2.2, label="Mocap before PoR")
         side.plot(pre_xyz[:, 0], pre_xyz[:, 2], color="0.35", linewidth=2.2,
                   label="Mocap before PoR")
-    ax.plot(*continuation_xyz.T, color="tab:blue", linewidth=2,
-            label="Reconstructed continuation")
-    side.plot(continuation_xyz[:, 0], continuation_xyz[:, 2], color="tab:blue",
-              linewidth=2, label="Reconstructed continuation")
+    reconstruction_failed = diagnostics.get("reconstruction_error") not in (None, "")
+    continuation_label = (
+        "FALLBACK: aligned measured trajectory" if reconstruction_failed
+        else "Reconstructed continuation"
+    )
+    continuation_color = "tab:orange" if reconstruction_failed else "tab:blue"
+    continuation_style = "--" if reconstruction_failed else "-"
+    ax.plot(*continuation_xyz.T, color=continuation_color, linestyle=continuation_style,
+            linewidth=2, label=continuation_label)
+    side.plot(continuation_xyz[:, 0], continuation_xyz[:, 2],
+              color=continuation_color, linestyle=continuation_style,
+              linewidth=2, label=continuation_label)
     ax.scatter(*original_xyz.T, s=38, marker="o", facecolors="none",
                edgecolors="tab:cyan", linewidths=1.5, label="Original League samples")
     side.scatter(original_xyz[:, 0], original_xyz[:, 2], s=38, marker="o",
@@ -115,7 +136,13 @@ def render_annotation_figure(
     text.axis("off")
     text.text(0, 1, _diagnostic_text(diagnostics), va="top", ha="left",
               family="monospace", fontsize=9)
-    fig.suptitle("Manual continuation relevance (model identity and rank hidden)", fontsize=13)
+    if reconstruction_failed:
+        fig.suptitle(
+            "WARNING: reconstruction failed — raw aligned League samples shown",
+            fontsize=13, color="darkred", fontweight="bold",
+        )
+        ax.set_title(f"{query_label} · {candidate_label}: reconstruction-error fallback")
+    else:
+        fig.suptitle("Manual continuation relevance (model identity and rank hidden)", fontsize=13)
     fig.tight_layout()
     return fig
-

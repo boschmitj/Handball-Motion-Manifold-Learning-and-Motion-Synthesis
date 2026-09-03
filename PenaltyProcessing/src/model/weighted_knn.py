@@ -46,14 +46,14 @@ GROUP_WEIGHTS_HEIGHT_FOCUS: dict[str, float] = {
 }
 
 BEST_RANDOM_WEIGHTS_CURRENT: dict[str, float] = {
-    "release_speed": 3.122191774027964,
-    "release_angles": 0.48649669239408283,
-    "release_height": 4.239295961166828,
-    "relative_trajectory": 0.1734364062696802,
-    "velocity_evolution": 0.7678062523986564,
+    "absolute_por": 5.790560717284391, 
+    "acceleration": 0.1348043190299895, 
+    "relative_trajectory": 0.1734364062696802, 
+    "release_angles": 0.48649669239408283, 
+    "release_height": 4.239295961166828, 
+    "release_speed": 3.122191774027964, 
     "trajectory_angles": 0.2854078774284084,
-    "acceleration": 0.1348043190299895,
-    "absolute_por": 5.790560717284391
+    "velocity_evolution": 0.7678062523986564
 }
 
 # Add new named configurations here. They automatically become valid

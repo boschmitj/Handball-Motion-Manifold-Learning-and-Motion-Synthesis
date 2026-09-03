@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.ranking.manual_annotation_tool import (
     ANNOTATION_FIELDS, AnnotationStore, build_candidate_material,
@@ -110,6 +111,42 @@ class ManualAnnotationToolTests(unittest.TestCase):
         self.assertAlmostEqual(material.diagnostics["direction_difference_deg"], 3.0)
         self.assertFalse(material.diagnostics["league_bounce_detected"])
         self.assertIsNone(material.diagnostics["aligned_pogc_z_m"])
+        self.assertEqual(material.diagnostics["reconstruction_status"], "validated_reconstruction")
+        self.assertIsNone(material.diagnostics["reconstruction_error"])
+
+    def test_material_falls_back_to_aligned_raw_samples_after_reconstruction_error(self):
+        mocap = {
+            "throw_id": "m1", "por_x_m": "13", "por_y_m": "0", "por_z_m": "1.7",
+            "release_speed_m_s": "10", "release_direction_deg": "5",
+            "release_height_m": "1.7", "is_bounce": "0",
+            "trajectory_json": json.dumps([
+                {"frame": 0, "t_since_ms": 0, "x": 0, "y": 0, "z": 0},
+                {"frame": 1, "t_since_ms": 50, "x": .5, "y": 0, "z": -.1},
+            ]),
+        }
+        league = {
+            "throw_id": "l1", "por_x_m": "14", "por_y_m": ".2", "por_z_m": "1.8",
+            "release_speed_m_s": "12", "release_direction_deg": "8",
+            "release_height_m": "1.8", "is_bounce": "1",
+            "trajectory_json": json.dumps([
+                {"frame": 0, "t_since_ms": 0, "x": 0, "y": 0, "z": 0},
+                {"frame": 1, "t_since_ms": 50, "x": .6, "y": .03, "z": -.05},
+                {"frame": 2, "t_since_ms": 100, "x": 1.2, "y": .06, "z": -.15},
+            ]),
+        }
+        with patch(
+            "src.ranking.manual_annotation_tool.reconstruct_league_continuation",
+            side_effect=AssertionError(),
+        ):
+            material = build_candidate_material(mocap, league, target_hz=100)
+
+        self.assertEqual(material.continuation[0]["x"], 13.0)
+        self.assertEqual(material.continuation[0]["y"], 0.0)
+        self.assertEqual(material.continuation[0]["z"], 1.7)
+        self.assertEqual(len(material.original_league_samples), 3)
+        self.assertTrue(material.diagnostics["league_bounce_detected"])
+        self.assertEqual(material.diagnostics["reconstruction_status"], "fallback_raw_aligned")
+        self.assertIn("AssertionError", material.diagnostics["reconstruction_error"])
 
 
 if __name__ == "__main__":

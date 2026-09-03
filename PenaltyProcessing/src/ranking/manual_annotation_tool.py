@@ -24,7 +24,8 @@ import numpy as np
 try:
     from src.combine_full_reconstructed_trajectories import combine_trajectory
     from src.trajectory_reconstruction import (
-        XYZ, _read_csv, parse_trajectory_json, reconstruct_league_continuation,
+        XYZ, _read_csv, align_trajectory_to_por, parse_trajectory_json,
+        reconstruct_league_continuation,
     )
 except ModuleNotFoundError as error:
     if error.name != "src":
@@ -32,7 +33,8 @@ except ModuleNotFoundError as error:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from combine_full_reconstructed_trajectories import combine_trajectory
     from trajectory_reconstruction import (
-        XYZ, _read_csv, parse_trajectory_json, reconstruct_league_continuation,
+        XYZ, _read_csv, align_trajectory_to_por, parse_trajectory_json,
+        reconstruct_league_continuation,
     )
 
 VISUALIZATION_DIR = Path(__file__).resolve().parents[2] / "visualization"
@@ -56,6 +58,7 @@ ANNOTATION_FIELDS = [
     "expected_contact_z_m", "ground_contact_error_m", "bounce_vertical_fit_rmse",
     "bounce_vz_in_m_s", "bounce_vz_out_m_s", "bounce_reconstruction_rmse_m",
     "bounce_reconstruction_max_error_m", "bounce_fit_valid",
+    "reconstruction_status", "reconstruction_error",
 ]
 RATING_FIELDS = [
     "overall_relevance", "speed_match", "direction_match",
@@ -336,10 +339,35 @@ def build_candidate_material(
     mocap: Mapping[str, Any], league: Mapping[str, Any], *, target_hz: float = 300.0,
     ground_z: float = .095, pre_por_ms: float = 250.0,
 ) -> CandidateMaterial:
-    """Reuse the production reconstruction/stitching path and derive diagnostics."""
-    continuation = reconstruct_league_continuation(
-        league, mocap, target_hz=target_hz, ground_z=ground_z,
-    )
+    """Build the plotted material, retaining raw geometry after validation errors.
+
+    Annotation should expose a problematic candidate rather than becoming
+    impossible at that candidate.  If the production reconstruction rejects
+    its own output, fall back to the measured League samples translated to the
+    Mocap PoR and flag that fallback prominently in the plot and CSV.
+    """
+    reconstruction_error: str | None = None
+    try:
+        continuation = reconstruct_league_continuation(
+            league, mocap, target_hz=target_hz, ground_z=ground_z,
+        )
+    except (AssertionError, ValueError, FloatingPointError) as error:
+        detail = str(error).strip() or "reconstruction validation failed"
+        reconstruction_error = f"{type(error).__name__}: {detail}"
+        original_relative = parse_trajectory_json(league)
+        league_por = np.asarray(
+            [float(league[f"por_{axis}_m"]) for axis in XYZ], dtype=float,
+        )
+        original_absolute: list[dict[str, Any]] = []
+        for source in original_relative:
+            point = dict(source)
+            point.update({
+                axis: float(source[axis]) + float(league_por[index])
+                for index, axis in enumerate(XYZ)
+            })
+            original_absolute.append(point)
+        mocap_por = tuple(float(mocap[f"por_{axis}_m"]) for axis in XYZ)
+        continuation = align_trajectory_to_por(original_absolute, mocap_por)
     combined = combine_trajectory(
         mocap, json.dumps(continuation, separators=(",", ":"), allow_nan=False),
     )
@@ -361,6 +389,7 @@ def build_candidate_material(
     mocap_height = _optional_float(mocap.get("release_height_m"))
     league_height = _optional_float(league.get("release_height_m"))
     bounce = next((point for point in continuation if point.get("event") == "bounce"), None)
+    source_bounce_detected = _as_bool(league.get("is_bounce"))
     aligned_pogc = None if bounce is None else _optional_float(bounce.get("z"))
     diagnostics: dict[str, Any] = {
         "mocap_release_speed_m_s": mocap_transition_speed,
@@ -381,13 +410,18 @@ def build_candidate_material(
             else abs(mocap_height - league_height)
         ),
         "mocap_has_ground_contact": _as_bool(mocap.get("is_bounce")),
-        "league_bounce_detected": bounce is not None,
+        "league_bounce_detected": bounce is not None or source_bounce_detected,
         "league_original_pogc_z_m": None if bounce is None else ground_z,
         "aligned_pogc_z_m": aligned_pogc,
         "expected_contact_z_m": ground_z,
         "ground_contact_error_m": (
             None if aligned_pogc is None else aligned_pogc - ground_z
         ),
+        "reconstruction_status": (
+            "validated_reconstruction" if reconstruction_error is None
+            else "fallback_raw_aligned"
+        ),
+        "reconstruction_error": reconstruction_error,
     }
     bounce_fields = (
         "bounce_vertical_fit_rmse", "bounce_vz_in_m_s", "bounce_vz_out_m_s",

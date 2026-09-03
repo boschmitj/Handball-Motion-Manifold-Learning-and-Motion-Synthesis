@@ -182,16 +182,26 @@ def ndcg_at_k(relevance: np.ndarray, k: int) -> float:
 
 
 def evaluate_manual_ndcg(ranked: pd.DataFrame, judgments: pd.DataFrame,
-                         k: int = 5) -> float:
-    required = {"mocap_throw_id", "league_throw_id", "relevance"}
+                         k: int = 5, excluded_mocap_throw_ids: set[str] | None = None) -> float:
+    required = {"mocap_throw_id", "league_throw_id"}
     if not required <= set(judgments):
         raise ValueError(f"Manual relevance CSV needs columns {sorted(required)}")
+    relevance_column = next(
+        (name for name in ("overall_relevance", "relevance") if name in judgments), None,
+    )
+    if relevance_column is None:
+        raise ValueError("Manual relevance CSV needs an overall_relevance or relevance column")
+    excluded_mocap_throw_ids = excluded_mocap_throw_ids or set()
     scores = []
     for query_id, truth in judgments.groupby("mocap_throw_id"):
+        if str(query_id) in excluded_mocap_throw_ids:
+            continue
         order = ranked[ranked.mocap_throw_id == query_id].sort_values("rank").head(k)
-        relevance = dict(zip(truth.league_throw_id, truth.relevance))
+        relevance = dict(zip(truth.league_throw_id, truth[relevance_column]))
         observed = np.asarray([relevance.get(candidate, 0) for candidate in order.league_throw_id])
-        ideal = np.sort(pd.to_numeric(truth.relevance, errors="coerce").fillna(0).to_numpy())[::-1][:k]
+        ideal = np.sort(pd.to_numeric(
+            truth[relevance_column], errors="coerce",
+        ).fillna(0).to_numpy())[::-1][:k]
         dcg = np.sum((np.power(2.0, observed) - 1.0) /
                      np.log2(np.arange(2, len(observed) + 2)))
         idcg = np.sum((np.power(2.0, ideal) - 1.0) /
@@ -216,6 +226,10 @@ def main() -> int:
               "build_ranking_dataset.py instead of regenerating them"),
     )
     parser.add_argument("--manual-relevance", type=Path)
+    parser.add_argument(
+        "--exclude-mocap-throws", nargs="*", default=[],
+        help="Mocap throw IDs to omit from manual nDCG evaluation",
+    )
     parser.add_argument("--augmentations", type=int, default=3)
     parser.add_argument("--hard-negatives", type=int, default=3)
     parser.add_argument("--random-negatives", type=int, default=1)
@@ -336,8 +350,13 @@ def main() -> int:
         manual.to_csv(args.output_dir / "manual_ranked_candidates.csv", index=False)
         if args.manual_relevance:
             judgments = read_feature_csv(args.manual_relevance)
-            metrics[f"learned_ndcg@{args.k}"] = evaluate_manual_ndcg(learned, judgments, args.k)
-            metrics[f"manual_ndcg@{args.k}"] = evaluate_manual_ndcg(manual, judgments, args.k)
+            excluded_mocap_throw_ids = set(args.exclude_mocap_throws)
+            metrics[f"learned_ndcg@{args.k}"] = evaluate_manual_ndcg(
+                learned, judgments, args.k, excluded_mocap_throw_ids,
+            )
+            metrics[f"manual_ndcg@{args.k}"] = evaluate_manual_ndcg(
+                manual, judgments, args.k, excluded_mocap_throw_ids,
+            )
     (args.output_dir / "metrics.json").write_text(
         json.dumps(metrics, indent=2, allow_nan=True) + "\n", encoding="utf-8")
     print(f"Wrote learned/manual comparison to {args.output_dir}")

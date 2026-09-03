@@ -218,6 +218,53 @@ def test_csv_export_reconstructs_all_match_ranks_by_default(tmp_path: Path) -> N
     assert [row["league_throw_id"] for row in rows] == ["L1", "L2", "L3", "L4", "L5"]
 
 
+def test_csv_export_can_skip_invalid_matches_and_report_them(tmp_path: Path) -> None:
+    valid = json.dumps([
+        _point(0, 0, 0, 0), _point(50, 1, 0, 0.1), _point(100, 2, 0, 0.15),
+    ])
+    invalid = json.dumps([
+        _point(0, 0, 0, 0), _point(0, 1, 0, 0.1),
+    ])
+
+    def write(path: Path, fields: list[str], rows: list[dict], delimiter: str = ",") -> None:
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields, delimiter=delimiter)
+            writer.writeheader()
+            writer.writerows(rows)
+
+    league_path, mocap_path, matches_path, output = (
+        tmp_path / name for name in ("league.csv", "mocap.csv", "matches.csv", "out.csv")
+    )
+    raw_fields = ["throw_id", "por_x_m", "por_y_m", "por_z_m", "trajectory_json"]
+    write(league_path, raw_fields, [
+        {"throw_id": "L1", "por_x_m": 1, "por_y_m": 2, "por_z_m": 3,
+         "trajectory_json": valid},
+        {"throw_id": "L2", "por_x_m": 1, "por_y_m": 2, "por_z_m": 3,
+         "trajectory_json": invalid},
+    ], delimiter=";")
+    write(mocap_path, raw_fields, [
+        {"throw_id": "M1", "por_x_m": 12.6, "por_y_m": -.2, "por_z_m": 1.8,
+         "trajectory_json": valid},
+    ], delimiter=";")
+    write(matches_path, ["mocap_throw_id", "rank", "league_throw_id"], [
+        {"mocap_throw_id": "M1", "rank": 1, "league_throw_id": "L1"},
+        {"mocap_throw_id": "M1", "rank": 2, "league_throw_id": "L2"},
+    ])
+
+    assert reconstruct_matches(
+        matches_path, league_path, mocap_path, output, skip_invalid=True,
+    ) == 1
+    with output.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [(row["match_rank"], row["league_throw_id"]) for row in rows] == [("1", "L1")]
+    errors = output.with_name("out_errors.csv")
+    with errors.open(newline="", encoding="utf-8") as handle:
+        error_rows = list(csv.DictReader(handle))
+    assert len(error_rows) == 1
+    assert error_rows[0]["league_throw_id"] == "L2"
+    assert error_rows[0]["error_type"] == "ValueError"
+
+
 def test_semicolon_csv_with_large_json_field_is_read_completely(tmp_path: Path) -> None:
     path = tmp_path / "raw_league.csv"
     long_trajectory = json.dumps([_point(i * 50, i, i / 10, i / 20) for i in range(2500)])

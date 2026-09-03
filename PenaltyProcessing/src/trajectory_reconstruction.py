@@ -615,6 +615,7 @@ def reconstruct_matches(
     output_csv: str | Path, *, target_hz: float = 300.0, rank: int | None = None,
     ground_z: float = 0.095,
     weight_run_id: int | None = None, weight_set: Mapping[str, float] | None = None,
+    skip_invalid: bool = False, errors_csv: str | Path | None = None,
 ) -> int:
     matches, _ = _read_csv(Path(matches_csv))
     output_path = Path(output_csv)
@@ -626,6 +627,10 @@ def reconstruct_matches(
                   "bounce_vertical_fit_rmse", "bounce_vz_in_m_s", "bounce_vz_out_m_s",
                   "bounce_reconstruction_rmse_m", "bounce_reconstruction_max_error_m",
                   "bounce_fit_valid", "trajectory_json"]
+    error_fieldnames = [
+        "mocap_throw_id", "match_rank", "league_throw_id", "error_type", "error",
+    ]
+    errors: list[dict[str, Any]] = []
     count = 0
     with output_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -634,12 +639,27 @@ def reconstruct_matches(
             match_rank = int(float(match.get("rank", 1)))
             if rank is not None and match_rank != rank:
                 continue
-            league = load_raw_throw(raw_league_csv, match["league_throw_id"])
-            mocap = load_raw_throw(raw_mocap_csv, match["mocap_throw_id"])
-            league_por = np.asarray([float(league[f"por_{a}_m"]) for a in XYZ])
-            por = np.asarray([float(mocap[f"por_{a}_m"]) for a in XYZ])
-            offset = por - league_por
-            reconstructed = reconstruct_league_continuation(league, mocap, target_hz, ground_z=ground_z)
+            try:
+                league = load_raw_throw(raw_league_csv, match["league_throw_id"])
+                mocap = load_raw_throw(raw_mocap_csv, match["mocap_throw_id"])
+                league_por = np.asarray([float(league[f"por_{a}_m"]) for a in XYZ])
+                por = np.asarray([float(mocap[f"por_{a}_m"]) for a in XYZ])
+                offset = por - league_por
+                reconstructed = reconstruct_league_continuation(
+                    league, mocap, target_hz, ground_z=ground_z,
+                )
+            except Exception as error:
+                if not skip_invalid:
+                    raise
+                detail = str(error).strip() or "reconstruction validation failed"
+                errors.append({
+                    "mocap_throw_id": match.get("mocap_throw_id", ""),
+                    "match_rank": match_rank,
+                    "league_throw_id": match.get("league_throw_id", ""),
+                    "error_type": type(error).__name__,
+                    "error": detail,
+                })
+                continue
             bounce_point = next((p for p in reconstructed if p.get("event") == "bounce"), None)
             writer.writerow({
                 "mocap_throw_id": match["mocap_throw_id"],
@@ -664,6 +684,16 @@ def reconstruct_matches(
                 "trajectory_json": json.dumps(reconstructed, separators=(",", ":"), allow_nan=False),
             })
             count += 1
+    if skip_invalid:
+        errors_path = (
+            Path(errors_csv) if errors_csv is not None
+            else output_path.with_name(f"{output_path.stem}_errors{output_path.suffix}")
+        )
+        errors_path.parent.mkdir(parents=True, exist_ok=True)
+        with errors_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=error_fieldnames)
+            writer.writeheader()
+            writer.writerows(errors)
     return count
 
 
@@ -773,6 +803,15 @@ def main() -> int:
         "--rank", type=int,
         help="reconstruct only this neighbor rank (default: reconstruct every match row)",
     )
+    parser.add_argument(
+        "--skip-invalid", action="store_true",
+        help=("continue after invalid match reconstructions and write them to "
+              "<output stem>_errors.csv"),
+    )
+    parser.add_argument(
+        "--errors-output", type=Path,
+        help="error-report CSV used with --skip-invalid (default: beside --output)",
+    )
     parser.add_argument("--ground-z", type=float, default=0.095,
                         help="ball-centre height at ground contact in metres (default: 0.095)")
     args = parser.parse_args()
@@ -806,9 +845,15 @@ def main() -> int:
     count = reconstruct_matches(
         matches, args.raw_league, args.raw_mocap, output, target_hz=args.target_hz,
         rank=args.rank, ground_z=args.ground_z, weight_run_id=args.random_run_id,
-        weight_set=weights,
+        weight_set=weights, skip_invalid=args.skip_invalid, errors_csv=args.errors_output,
     )
     print(f"Wrote {count} reconstructed trajectories to {output}")
+    if args.skip_invalid:
+        errors_output = args.errors_output or output.with_name(
+            f"{output.stem}_errors{output.suffix}"
+        )
+        error_rows, _ = _read_csv(errors_output)
+        print(f"Skipped {len(error_rows)} invalid matches; details: {errors_output}")
     return 0
 
 

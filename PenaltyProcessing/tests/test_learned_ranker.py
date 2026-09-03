@@ -9,7 +9,7 @@ from src.ranking.build_ranking_dataset import (
     BASE_COMPONENTS, PERTURBATION_PROFILES, add_interactions,
     build_synthetic_splits, component_matrix, perturb_raw_throw,
 )
-from src.ranking.evaluate_ranker import rank_queries
+from src.ranking.evaluate_ranker import evaluate_manual_ndcg, rank_queries
 from src.ranking.linear_pairwise_ranker import LinearPairwiseRanker
 
 
@@ -167,6 +167,24 @@ class LearnedRankerTests(unittest.TestCase):
         by_id = dict(zip(league.throw_id, components["release_speed"]))
         for _, row in ranked.iterrows():
             self.assertAlmostEqual(row.release_speed_distance, by_id[row.league_throw_id])
+
+    def test_manual_ndcg_uses_annotation_relevance_and_excludes_mocap_throws(self):
+        ranked = pd.DataFrame([
+            {"mocap_throw_id": "keep", "league_throw_id": "best", "rank": 1},
+            {"mocap_throw_id": "discard", "league_throw_id": "wrong", "rank": 1},
+        ])
+        judgments = pd.DataFrame([
+            {"mocap_throw_id": "keep", "league_throw_id": "best", "overall_relevance": 3},
+            {"mocap_throw_id": "discard", "league_throw_id": "right", "overall_relevance": 3},
+        ])
+
+        self.assertEqual(evaluate_manual_ndcg(ranked, judgments, k=1), .5)
+        self.assertEqual(
+            evaluate_manual_ndcg(
+                ranked, judgments, k=1, excluded_mocap_throw_ids={"discard"},
+            ),
+            1.0,
+        )
 
 
 if __name__ == "__main__":
